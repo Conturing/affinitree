@@ -1,0 +1,55 @@
+[package]
+name = "affinitree"
+version = "0.20.0"
+description = "A crate to distill faithful decision trees out of neural networks"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Conturing/affinitree"
+documentation = "https://docs.rs/affinitree"
+homepage = "https://github.com/Conturing/affinitree"
+keywords = ["decision trees", "explainable AI", "machine learning", "model distillation"]
+categories = ["data-structures", "mathematics", "science"]
+exclude = ["/.github/*"]
+edition = "2021"
+rust-version = "1.64"
+
+[dependencies]
+approx = "0.5.1"
+bitflags = "2.3.3"
+bitvec = "1.0.1"
+console = "0.15.7"
+delegate = "0.10.0"
+derive_more = "0.99.17"
+doc-comment = "0.3.3"
+indicatif = "0.17.5"
+itertools = "0.10.5"
+log = { version = "0.4.17" }
+minilp = {version = "0.2.2" }
+ndarray = {version = "0.15.6", features = ["approx-0_5"] }
+ndarray-npy = "0.8.1"
+rand = "0.8.5"
+regex = "1.9.0"
+slab = { version = "0.4.8" }
+
+[dev-dependencies]
+assertables = { version = "7.0.1" }
+criterion = "0.4.0"
+fast_log = { version = "1.5.54" }
+ndarray-rand = "0.14.0"
+serde_json = { version = "1.0" }
+
+
+[[bench]]
+name = "distillation"
+harness = false
+
+[profile.bench]
+lto = true
+codegen-units = 1
+# panic = "abort"
+debug = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+# panic = "abort"
+debug = true

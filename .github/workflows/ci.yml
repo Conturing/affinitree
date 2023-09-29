@@ -1,0 +1,77 @@
+# Adopted from https://raw.githubusercontent.com/rust-lang/regex/master/.github/workflows/ci.yml
+
+name: ci
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+# The section is needed to drop write-all permissions that are granted on
+# `schedule` event. By specifying any permission explicitly all others are set
+# to none. By using the principle of least privilege the damage a compromised
+# workflow can do (because of an injection or compromised third party tool or
+# action) is restricted. Currently the worklow doesn't need any additional
+# permission except for pulling the code. Adding labels to issues, commenting
+# on pull-requests, etc. may need additional permissions:
+#
+# Syntax for this section:
+# https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+#
+# Reference for how to assign permissions on a job-by-job basis:
+# https://docs.github.com/en/actions/using-jobs/assigning-permissions-to-jobs
+#
+# Reference for available permissions that we can enable if needed:
+# https://docs.github.com/en/actions/security-guides/automatic-token-authentication#permissions-for-the-github_token
+permissions:
+  # to fetch code (actions/checkout)
+  contents: read
+
+jobs:
+  # This job runs cargo's build, test, and bench command.
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - build: stable
+          os: ubuntu-latest
+          rust: stable
+          bench: true
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: ${{ matrix.rust }}
+        override: true
+    - name: Basic build
+      run: cargo build --verbose 
+    - name: Build docs
+      run: cargo doc --verbose 
+    - name: Run tests
+      run: cargo test --verbose
+    - name: Build benchmarks
+      if: ${{ matrix.bench }}
+      run: cargo bench --verbose --no-run
+
+  # Tests that everything is formatted correctly.
+  rustfmt:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        components: rustfmt
+        override: true
+    - name: Check formatting
+      run: |
+        cargo fmt --all -- --check
