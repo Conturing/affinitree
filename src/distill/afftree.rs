@@ -27,8 +27,8 @@ use super::{
     iter::PolyhedraIter,
     node::{write_children, AffContent},
 };
-use crate::core::iter::PolyhedraGen;
-use crate::core::node::AffNode;
+use crate::distill::iter::PolyhedraGen;
+use crate::distill::node::AffNode;
 use crate::linalg::affine::{AffFunc, Polytope};
 use crate::linalg::polyhedron::PolytopeStatus;
 use crate::tree::graph::{Label, Tree, TreeIndex};
@@ -38,6 +38,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex};
 /// This structure is based on an oblique decision tree:
 /// * Its inner nodes form a decision structure that partitions the input space similar to a [BSP tree](https://en.wikipedia.org/wiki/Binary_space_partitioning) into convex regions.
 /// * Its terminal nodes associate with each such region a linear function.
+///
 /// Technically, each decision node divides the space into two halfspace which are separated by
 /// a [hyperplane](https://en.wikipedia.org/wiki/Hyperplane). The outgoing edges of decision nodes
 /// have labels that uniquely associate the edge with a halfspace. A path over multiple edges then
@@ -57,7 +58,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex};
 ///
 /// This tree is constructed in `affinitree` as follows:
 /// ```rust
-/// use affinitree::{aff, poly, core::afftree::AffTree, core::dot::dot_str, linalg::affine::PolyRepr};
+/// use affinitree::{aff, poly, distill::afftree::AffTree, distill::dot::dot_str, linalg::affine::PolyRepr};
 ///
 /// // construct a new AffTree instance with the given inequality as its root.
 /// let mut dd = AffTree::<2>::from_aff(poly!([[1, 1]] < [0]).convert_to(PolyRepr::MatrixBiasGeqZero)); // node index 0
@@ -108,7 +109,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex};
 /// Roughly speaking, the composition of two AffTree instances corresponds to an sequential evaluation of the two trees, as demonstrated by the following example.
 ///
 /// ```rust
-/// use affinitree::{aff, core::afftree::AffTree};
+/// use affinitree::{aff, distill::afftree::AffTree};
 /// use ndarray::arr1;
 ///
 /// let mut tree0 = AffTree::<2>::from_aff(aff!([[1., 0.]] + [2.]));
@@ -195,14 +196,34 @@ impl<const K: usize> AffTree<K> {
         self.in_dim
     }
 
+    // Returns the number of nodes in this tree.
     #[inline]
     pub fn len(&self) -> usize {
         self.tree.len()
     }
 
+    /// Returns true if there are no values in this tree.
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.tree.is_empty()
+    }
+
     #[inline]
     pub fn num_terminals(&self) -> usize {
         self.tree.num_terminals()
+    }
+
+    /// Returns the depth of this tree, that is, the length of its longest path.
+    /// 
+    /// Correspondingly, an empty tree has depth 0, and a tree with only a root node has depth 1.
+    #[inline(always)]
+    pub fn depth(&self) -> usize {
+        self.tree.depth()
+    }
+
+    #[inline]
+    pub fn reserve(&mut self, additional: usize) {
+        self.tree.reserve(additional);
     }
 
     #[inline]
@@ -232,7 +253,7 @@ impl<const K: usize> AffTree<K> {
     /// # Examples
     ///
     /// ```
-    /// use affinitree::core::afftree::AffTree;
+    /// use affinitree::distill::afftree::AffTree;
     /// use affinitree::linalg::affine::{AffFunc, Polytope};
     ///
     /// let aff_tree = AffTree::<2>::from_aff(AffFunc::identity(2));
@@ -421,7 +442,7 @@ impl<const K: usize> AffTree<K> {
     /// # Example
     ///
     /// ```rust
-    /// use affinitree::{aff, core::afftree::AffTree};
+    /// use affinitree::{aff, distill::afftree::AffTree};
     /// use ndarray::arr1;
     ///
     /// let mut tree0 = AffTree::<2>::from_aff(aff!([[1., 0.]] + [2.]));
@@ -742,7 +763,7 @@ mod tests {
     use super::AffTree;
     use crate::{
         aff,
-        core::{iter::PolyhedraIter, schema},
+        distill::{iter::PolyhedraIter, schema},
         linalg::affine::{AffFunc, PolyRepr, Polytope},
         path, poly,
     };

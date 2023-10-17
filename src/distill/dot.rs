@@ -14,7 +14,7 @@
 
 //! An interface to graphviz's DOT language to export and visualize AffTrees
 
-use crate::core::{
+use crate::distill::{
     afftree::AffTree,
     node::{write_predicate, write_terminal},
 };
@@ -54,7 +54,7 @@ pub fn dot_str<const K: usize, T: Write>(f: &mut T, tree: &AffTree<K>) -> std::f
 
 #[cfg(test)]
 pub mod test {
-    use crate::{core::dot::dot_str, core::schema};
+    use crate::{distill::dot::dot_str, distill::schema};
 
     #[test]
     fn test_dot_str() {

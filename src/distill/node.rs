@@ -14,7 +14,7 @@
 
 use crate::linalg::{
     affine::{AffFunc, Polytope},
-    vis::{write_aff, write_polytope},
+    display::{write_aff, write_polytope},
 };
 
 use crate::tree::graph::TreeNode;

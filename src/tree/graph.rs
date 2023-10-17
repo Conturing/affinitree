@@ -219,6 +219,11 @@ impl<N, const K: usize> Tree<N, K> {
             .count()
     }
 
+    #[inline]
+    pub fn reserve(&mut self, additional: usize) {
+        self.arena.reserve(additional);
+    }
+
     /// Returns the value associated with the node at the given index.
     #[inline(always)]
     pub fn node_value(&self, idx: TreeIndex) -> Option<&N> {
@@ -513,13 +518,14 @@ impl<N, const K: usize> Tree<N, K> {
     }
 
     pub fn add_child_node(&mut self, parent: TreeIndex, label: Label, value: N) -> TreeIndex {
-        let childnode = TreeNode::new(value, Some(parent));
+        assert!(self.arena.contains(parent), "Cannot add child: parent node not contained in graph");
 
+        let childnode = TreeNode::new(value, Some(parent));
         let node_idx = self.arena.insert(childnode);
 
         let parent_node = self
             .tree_node_mut(parent)
-            .expect("Parent node not contained in graph");
+            .unwrap();
         parent_node.isleaf = false;
         assert!(
             parent_node.children[label].is_none(),

@@ -26,7 +26,7 @@ use ndarray::{
     concatenate, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Data, Ix1, Ix2, RawDataClone,
 };
 
-use crate::linalg::vis::{write_aff, write_polytope};
+use crate::linalg::display::{write_aff, write_polytope};
 
 // wrap ndarray data types
 pub type Owned = ndarray::OwnedRepr<f64>;

@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use affinitree::core::builder::Layer;
-    use affinitree::core::builder::{afftree_from_layers, read_layers};
+    use affinitree::distill::builder::Layer;
+    use affinitree::distill::builder::{afftree_from_layers, read_layers};
     use approx::assert_relative_eq;
     use itertools::Itertools;
     use ndarray::{Array, Array1};

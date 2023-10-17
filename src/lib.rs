@@ -15,7 +15,7 @@
 /*!
 Faithful neural network distillation.
 
-This crate provides methods to [distil](https://en.wikipedia.org/wiki/Knowledge_distillation)
+This crate provides methods to [distill](https://en.wikipedia.org/wiki/Knowledge_distillation)
 faithful decision trees out of piece-wise linear neural networks.
 The resulting decision tree stores in a compact manner the linear regions of the distilled
 network. The term faithful refers to the property that the resulting tree is not an
@@ -23,18 +23,18 @@ approximation but a complete semantic replica of the network (this property is a
 as semantic-preserving or fidelitous).
 
 `affinitree` supports the following operations:
- - distil a decision tree from a sequence of linear and ReLU layers
+ - distill a decision tree from a sequence of linear and ReLU layers
  - combine decision tree instances using composition
  - visualize a decision tree using Graphviz's DOT language
  - optimize decision trees using infeasible path elimination
  - manually construct a decision tree to represent any piece-wise linear function (such as custom activation functions)
 
-A corner stone of this crate is a data structure called [`AffTree`](crate::core::afftree::AffTree) that can represent any
+A corner stone of this crate is a data structure called [`AffTree`](crate::distill::afftree::AffTree) that can represent any
 (continuous or non-continuous) [piece-wise linear function](https://en.wikipedia.org/wiki/Piecewise_linear_function).
 This structure is based on oblique decision trees and BSP trees.
 
 # Quick Start
-[`AffTree`s](crate::core::afftree::AffTree) can be directly constructed from a sequence of linear functions and ReLUs.
+[`AffTree`s](crate::distill::afftree::AffTree) can be directly constructed from a sequence of linear functions and ReLUs.
 As `affinitree` works on pretrained neural networks, it was designed to be compatible with
 many neural network libraries. Therefore, the encoding of layers is based on a universal
 format introduced by `numpy` to encode matrices.
@@ -43,7 +43,7 @@ For testing purposes some pretrained networks are provided in the resource folde
 The following example loads a pretrained network on MNIST with 4 hidden layers à 5 neurons
 and distills it into an `AffTree` called dd.
 ```rust
-use affinitree::core::builder::{read_layers, afftree_from_layers};
+use affinitree::distill::builder::{read_layers, afftree_from_layers};
 
 // load a sequence of pretrained layers from a numpy file
 let layers = read_layers(&"res/nn/mnist-5-5.npz").unwrap();
@@ -57,7 +57,7 @@ The following example encodes a pretrained network on the IRIS data set with 1 h
 á 4 neurons using the `aff!` macro.
 ```rust
 use affinitree::{poly, aff};
-use affinitree::core::builder::{Layer::{Linear, ReLU}, afftree_from_layers};
+use affinitree::distill::builder::{Layer::{Linear, ReLU}, afftree_from_layers};
 use affinitree::linalg::affine::AffFunc;
 
 let l0 = aff!([[-0.09177965670824051, 0.8253487348556519, -0.8163803815841675, -0.9800696969032288],
@@ -115,6 +115,6 @@ addition, subtraction, scalar multiplication, and Cartesian product.
 // #[cfg(doctest)]
 // doc_comment::doctest!("../README.md");
 
-pub mod core;
+pub mod distill;
 pub mod linalg;
 pub mod tree;

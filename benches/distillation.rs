@@ -1,7 +1,7 @@
 use affinitree::aff;
-use affinitree::core::afftree::AffTree;
-use affinitree::core::builder::{afftree_from_layers, read_layers};
-use affinitree::core::schema::{self, ReLU};
+use affinitree::distill::afftree::AffTree;
+use affinitree::distill::builder::{afftree_from_layers, read_layers};
+use affinitree::distill::schema::{self, ReLU};
 use affinitree::linalg::affine::AffFunc;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

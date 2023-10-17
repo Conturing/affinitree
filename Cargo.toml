@@ -1,6 +1,6 @@
 [package]
 name = "affinitree"
-version = "0.20.0"
+version = "0.20.1"
 description = "A crate to distill faithful decision trees out of neural networks"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Conturing/affinitree"
