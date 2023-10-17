@@ -97,12 +97,12 @@ use crate::tree::graph::{Label, Tree, TreeIndex};
 //// / n2 -> n6 [label=1, style=solid];
 /// // }
 /// ```
-/// 
+///
 /// # Technical Overview
 /// `AffTree`s are implemented over an arena provided by the `slab` crate.
 /// They have a compile time branching factor `K` (in most cases a binary tree is sufficient, i.e., K=2).
 /// Elements of the tree have a unique index during their lifetime.
-/// 
+///
 /// # Composition
 /// `AffTree`s allow a modular construction by composition. The semantics of composition
 /// follow directly from the mathematical definition of [function composition](https://en.wikipedia.org/wiki/Function_composition).
@@ -214,7 +214,7 @@ impl<const K: usize> AffTree<K> {
     }
 
     /// Returns the depth of this tree, that is, the length of its longest path.
-    /// 
+    ///
     /// Correspondingly, an empty tree has depth 0, and a tree with only a root node has depth 1.
     #[inline(always)]
     pub fn depth(&self) -> usize {

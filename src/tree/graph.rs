@@ -518,14 +518,15 @@ impl<N, const K: usize> Tree<N, K> {
     }
 
     pub fn add_child_node(&mut self, parent: TreeIndex, label: Label, value: N) -> TreeIndex {
-        assert!(self.arena.contains(parent), "Cannot add child: parent node not contained in graph");
+        assert!(
+            self.arena.contains(parent),
+            "Cannot add child: parent node not contained in graph"
+        );
 
         let childnode = TreeNode::new(value, Some(parent));
         let node_idx = self.arena.insert(childnode);
 
-        let parent_node = self
-            .tree_node_mut(parent)
-            .unwrap();
+        let parent_node = self.tree_node_mut(parent).unwrap();
         parent_node.isleaf = false;
         assert!(
             parent_node.children[label].is_none(),
