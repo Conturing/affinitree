@@ -1,3 +1,9 @@
+/// Equivalence test based on iris.
+///
+/// In this test case a DNN trained on the iris dataset is loaded
+/// and distilled into an AffTree, which is then tested against a
+/// sequential evaluation of the DNN layers. Also the frequency with
+/// which the terminals are reached are logged.
 #[cfg(test)]
 mod tests {
     use affinitree::distill::builder::Layer;
@@ -24,7 +30,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_read_npy() {
+    pub fn test_equivalence_iris_dnn() {
         let layers = read_layers(&Path::new("tests/iris_44.npz")).unwrap();
 
         let dd = afftree_from_layers(4, &layers);

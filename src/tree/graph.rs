@@ -20,7 +20,7 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use itertools::enumerate;
+use itertools::{enumerate, Itertools};
 use slab::Slab;
 
 use super::iter::{DFSEdgeIter, DfsPreIter};
@@ -361,6 +361,8 @@ impl<N, const K: usize> Tree<N, K> {
 
     /// Iterates over the existing children of the given node. For each child, the edge connecting it to its parent is returned.
     ///
+    /// # Panics
+    ///
     /// Panics if the given index is not associated with a node in this tree.
     #[inline(always)]
     pub fn children(
@@ -537,47 +539,92 @@ impl<N, const K: usize> Tree<N, K> {
         node_idx
     }
 
-    /// Removes the child from parent that is reachable by label.
+    /// Tries to remove the child from ``parent`` that is reachable by ``label``.
     /// Any descendant that is only reachable from the child is also removed.
-    pub fn remove_child(&mut self, parent: TreeIndex, label: Label) {
-        let child_idx = self.tree_node(parent).unwrap().children[label].unwrap();
+    pub fn try_remove_child(&mut self, parent: TreeIndex, label: Label) -> Option<N> {
+        let child_idx = self.child(parent, label)?.target_idx;
+        self.remove_all_descendants(child_idx);
+
         self.arena[parent].children[label] = None;
 
         if self.num_children(parent) == 0 {
             self.arena[parent].isleaf = true;
         }
 
-        let mut stack = Vec::new();
-        stack.push(child_idx);
+        self.arena.try_remove(child_idx).map(|x| x.value)
+    }
+
+    /// Removes the child from ``parent`` that is reachable by ``label``.
+    /// Any descendant that is only reachable from the child is also removed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ``parent`` has no child reachable by ``label``.
+    pub fn remove_child(&mut self, parent: TreeIndex, label: Label) -> N {
+        self.try_remove_child(parent, label).expect("invalid index")
+    }
+
+    /// Removes all existing descendants of ``subtree_root``.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ``subtree_root`` is not contained in this tree.
+    pub fn remove_all_descendants(&mut self, subtree_root: TreeIndex) {
+        let mut stack = self
+            .children(subtree_root)
+            .map(|edg| edg.target_idx)
+            .collect_vec();
 
         while let Some(node_idx) = stack.pop() {
-            let current_node = self.arena.remove(node_idx);
-            if !current_node.isleaf {
-                for child_idx in current_node.children.into_iter().flatten() {
-                    stack.push(child_idx);
-                }
+            let current_node = self.tree_node(node_idx).unwrap();
+            for child_idx in current_node.children.into_iter().flatten() {
+                stack.push(child_idx);
             }
+            self.arena.remove(node_idx);
+        }
+
+        let node = self.tree_node_mut(subtree_root).unwrap();
+        node.isleaf = true;
+        for child in &mut node.children {
+            *child = None;
         }
     }
 
-    pub fn merge_child_with_parent(&mut self, node: TreeIndex, label: Label) {
-        assert!(self.num_children(node) == 1);
-        let child_idx = self.arena[node].children[label].unwrap();
+    /// Create a direct edge from the grandparent to the child, effectively skipping
+    /// ``parent_idx``. Afterwards ``parent_idx`` is removed from the graph.
+    ///
+    /// This is a useful optimization when ``parent_idx`` is redundant.
+    pub fn merge_child_with_parent(
+        &mut self,
+        parent_idx: TreeIndex,
+        label: Label,
+    ) -> Option<TreeNode<N, K>> {
+        assert!(self.num_children(parent_idx) == 1);
+        if let Some(root_idx) = self.root {
+            if root_idx == parent_idx {
+                return None;
+            }
+        }
+        let child_idx = self.arena[parent_idx].children[label].unwrap();
 
         // Copy children to parent
-        let parent_idx = self.arena[node].parent.unwrap();
-        let label = self.get_label(parent_idx, node).unwrap();
+        let grandparent_idx = self.arena[parent_idx].parent.unwrap();
+        let grandparent_label = self.get_label(grandparent_idx, parent_idx).unwrap();
 
         // Skip node
-        self.arena[parent_idx].children[label] = Some(child_idx);
-        self.arena[child_idx].parent = Some(parent_idx);
+        self.arena[grandparent_idx].children[grandparent_label] = Some(child_idx);
+        self.arena[child_idx].parent = Some(grandparent_idx);
 
-        self.arena.remove(node);
+        self.arena.remove(parent_idx).into()
     }
 
     pub fn update_node(&mut self, idx: TreeIndex, value: N) -> Option<N> {
         let node = self.tree_node_mut(idx)?;
         Some(mem::replace(&mut node.value, value))
+    }
+
+    pub fn contains(&self, node_idx: TreeIndex) -> bool {
+        self.arena.contains(node_idx)
     }
 
     pub fn path_to_node(&self, node_idx: usize) -> Vec<(TreeIndex, Label)> {
@@ -836,6 +883,50 @@ mod tests {
         *edg.source_value = 7;
 
         assert_eq!(tree.tree_node(1).unwrap().value, 7);
+    }
+
+    #[test]
+    fn test_remove_node() {
+        let mut tree = Tree::<(), 2>::new();
+
+        let z = tree.add_root(()); // 0
+        let c0 = tree.add_child_node(z, 0, ()); // 1
+        let c1 = tree.add_child_node(z, 1, ()); // 2
+        let l0 = tree.add_child_node(c0, 0, ()); // 3
+        let l1 = tree.add_child_node(c0, 1, ()); // 4
+        let r0 = tree.add_child_node(c1, 0, ()); // 5
+        let r1 = tree.add_child_node(c1, 1, ()); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+
+        tree.remove_child(z, 1);
+        assert!(!tree.contains(c1));
+        assert!(!tree.contains(r0));
+        assert!(!tree.contains(r1));
+        assert!(!tree.contains(rr1));
+        assert_eq!(tree.len(), 4);
+    }
+
+    #[test]
+    fn test_merge() {
+        let mut tree = Tree::<(), 2>::new();
+
+        let z = tree.add_root(()); // 0
+        let c0 = tree.add_child_node(z, 0, ()); // 1
+        let c1 = tree.add_child_node(z, 1, ()); // 2
+        let l0 = tree.add_child_node(c0, 0, ()); // 3
+        let l1 = tree.add_child_node(c0, 1, ()); // 4
+        let r0 = tree.add_child_node(c1, 0, ()); // 5
+        let r1 = tree.add_child_node(c1, 1, ()); // 6
+        let rr1 = tree.add_child_node(r1, 0, ()); // 7
+
+        tree.merge_child_with_parent(r1, 0);
+
+        assert!(!tree.contains(r1));
+        assert_eq!(tree.parent(rr1).unwrap().source_idx, c1);
+        assert_eq!(tree.parent(rr1).unwrap().label, 1);
+        assert_eq!(tree.child(c1, 1).unwrap().target_idx, rr1);
+        assert_eq!(tree.child(c1, 1).unwrap().label, 1);
+        assert_eq!(tree.len(), 7);
     }
 
     #[test]

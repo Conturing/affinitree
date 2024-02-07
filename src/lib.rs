@@ -34,7 +34,7 @@ A corner stone of this crate is a data structure called [`AffTree`](crate::disti
 This structure is based on oblique decision trees and BSP trees.
 
 # Quick Start
-[`AffTree`s](crate::distill::afftree::AffTree) can be directly constructed from a sequence of linear functions and ReLUs.
+**[`AffTree`s](crate::distill::afftree::AffTree)** can be directly constructed from a sequence of linear functions and ReLUs.
 As `affinitree` works on pretrained neural networks, it was designed to be compatible with
 many neural network libraries. Therefore, the encoding of layers is based on a universal
 format introduced by `numpy` to encode matrices.

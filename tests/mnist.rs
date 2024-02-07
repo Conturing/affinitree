@@ -1,3 +1,9 @@
+/// Equivalence test based on mnist.
+///
+/// In this test case a DNN trained on the mnist dataset is loaded
+/// and distilled into an AffTree, which is then tested against a
+/// sequential evaluation of the DNN layers. Also the frequency with
+/// which the terminals are reached are logged.
 #[cfg(test)]
 mod tests {
     use affinitree::distill::builder::Layer;

@@ -161,6 +161,9 @@ impl<const K: usize> AffTree<K> {
         }
     }
 
+    /// Crates an AffTree instance from the given ``precondition``.
+    /// The resulting AffTree is a partial function that only accepts inputs inside
+    /// the given ``precondition``, for which it returns the input as is.
     pub fn from_precondition(precondition: Polytope, func: AffFunc) -> AffTree<K> {
         assert!(precondition.indim() == func.indim());
         assert!(precondition.n_constraints() > 0);
@@ -180,6 +183,10 @@ impl<const K: usize> AffTree<K> {
         tree.add_child_node(parent, 1, func);
 
         tree
+    }
+
+    pub fn from_slice(reference_point: &Array1<f64>) -> AffTree<K> {
+        AffTree::from_aff(AffFunc::slice(reference_point))
     }
 
     #[inline]
@@ -462,8 +469,8 @@ impl<const K: usize> AffTree<K> {
     /// );
     /// ```
     #[inline]
-    pub fn compose<const OPTIMIZE: bool>(&mut self, other: &AffTree<K>) {
-        if OPTIMIZE {
+    pub fn compose<const prune: bool>(&mut self, other: &AffTree<K>) {
+        if prune {
             AffTree::lift_func(
                 other,
                 self,
@@ -1033,8 +1040,6 @@ mod tests {
 
         let mut tree = generic_tree(true);
 
-        println!("{}", &tree);
-
         tree.infeasible_elimination(None);
 
         let nodes: Vec<usize> = tree.tree.node_iter().map(|(idx, _)| idx).collect();
@@ -1168,6 +1173,8 @@ mod tests {
     #[test]
     pub fn dd_is_feasible2_2() {
         init_logger();
+        // Construct a polytope where every hyperplane is supportive (i.e., no hyperplane is redundant)
+        // Solutions are roughly contained inside [-4, 4] x [-1, 7]
 
         let poly = poly!(
             [
@@ -1185,12 +1192,14 @@ mod tests {
 
         dd.infeasible_elimination(None);
 
+        // Each of the seven hyperplanes is required + one terminal
         assert_eq!(dd.len(), 8);
     }
 
     #[test]
     pub fn dd_is_feasible2_3() {
         init_logger();
+        // Construct one path / polytope which has solutions in the upper quadrant
 
         let poly = poly!(
             [

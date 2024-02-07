@@ -64,13 +64,13 @@ pub mod test {
             bgcolor=transparent;\n\
             concentrate=true;\n\
             margin=0;\n\
-            n0 [label=\"−$0 1.00 −$1 0.00 <= 0.00\", shape=box];\n\
-            n1 [label=\"−$0 0.00 −$1 1.00 <= 0.00\", shape=box];\n\
-            n2 [label=\"−$0 0.00 −$1 1.00 <= 0.00\", shape=box];\n\
-            n3 [label=\"0.00\n $0 0.00 +$1 1.00 + 0.00\", shape=ellipse];\n\
+            n0 [label=\"−1.00 $0 −0.00 $1 ≤ 0.00\", shape=box];\n\
+            n1 [label=\"−0.00 $0 −1.00 $1 ≤ 0.00\", shape=box];\n\
+            n2 [label=\"−0.00 $0 −1.00 $1 ≤ 0.00\", shape=box];\n\
+            n3 [label=\"0.00\n 0.00 $0 +1.00 $1 + 0.00\", shape=ellipse];\n\
             n4 [label=\"0.00\n0.00\", shape=ellipse];\n\
-            n5 [label=\" $0 1.00 +$1 0.00 + 0.00\n $0 0.00 +$1 1.00 + 0.00\", shape=ellipse];\n\
-            n6 [label=\" $0 1.00 +$1 0.00 + 0.00\n0.00\", shape=ellipse];\n\
+            n5 [label=\" 1.00 $0 +0.00 $1 + 0.00\n 0.00 $0 +1.00 $1 + 0.00\", shape=ellipse];\n\
+            n6 [label=\" 1.00 $0 +0.00 $1 + 0.00\n0.00\", shape=ellipse];\n\
             n0 -> n1 [label=1, style=solid];\n\
             n0 -> n2 [label=0, style=dashed];\n\
             n2 -> n3 [label=1, style=solid];\n\

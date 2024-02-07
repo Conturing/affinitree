@@ -19,6 +19,7 @@ use crate::linalg::affine::AffFunc;
 
 use ndarray::{Array1, Array2};
 
+/// Create an AffTree instance that corresponds to the ReLU function element-wise.
 #[allow(non_snake_case)]
 pub fn ReLU(dim: usize) -> AffTree<2> {
     let mut dd = AffTree::new(dim);
@@ -46,6 +47,8 @@ pub fn ReLU(dim: usize) -> AffTree<2> {
     dd
 }
 
+/// Create an AffTree instance that corresponds to the ReLU function applied
+/// to the specified ``row``.
 #[allow(non_snake_case)]
 pub fn partial_ReLU(dim: usize, row: usize) -> AffTree<2> {
     assert!(
@@ -66,7 +69,167 @@ pub fn partial_ReLU(dim: usize, row: usize) -> AffTree<2> {
     dd
 }
 
-/// Build an AffTree that implements the argmax function.
+/// Create an AffTree instance that corresponds to the leaky ReLU function applied
+/// to the specified ``row``.
+#[allow(non_snake_case)]
+pub fn partial_leaky_ReLU(dim: usize, row: usize, alpha: f64) -> AffTree<2> {
+    assert!(
+        row < dim,
+        "Expected row <= dim, got row={} <= dim={}",
+        row,
+        dim
+    );
+
+    let mut dd = AffTree::from_aff(AffFunc::unit(dim, row));
+
+    let affine_true = AffFunc::identity(dim);
+    let mut affine_false = AffFunc::zero_idx(dim, row);
+    affine_false.mat[[row, row]] = alpha;
+
+    dd.add_child_node(0, 1, affine_true);
+    dd.add_child_node(0, 0, affine_false);
+
+    dd
+}
+
+/// Create an AffTree instance that corresponds to the hard hyperbolic tangent function applied
+/// to the specified ``row``.
+#[allow(non_snake_case)]
+pub fn partial_hard_tanh(dim: usize, row: usize, min_val: f64, max_val: f64) -> AffTree<2> {
+    assert!(
+        row < dim,
+        "Expected row <= dim, got row={} <= dim={}",
+        row,
+        dim
+    );
+    assert!(
+        min_val <= max_val,
+        "Expected min_val to be lower than or equal to max_val, but got {} > {}",
+        min_val,
+        max_val
+    );
+
+    let mut aff = AffFunc::unit(dim, row);
+    aff.bias[0] = -max_val;
+    let mut dd = AffTree::from_aff(aff);
+
+    let mut aff = AffFunc::unit(dim, row);
+    aff.mat[[0, row]] = -1.0;
+    aff.bias[0] = min_val;
+
+    let mut affine_max = AffFunc::zero_idx(dim, row);
+    affine_max.bias[row] = max_val;
+
+    let n = dd.add_child_node(0, 0, aff);
+    dd.add_child_node(0, 1, affine_max);
+
+    let affine_id = AffFunc::identity(dim);
+    let mut affine_min = AffFunc::zero_idx(dim, row);
+    affine_min.bias[row] = min_val;
+
+    dd.add_child_node(n, 1, affine_min);
+    dd.add_child_node(n, 0, affine_id);
+
+    dd
+}
+
+/// Create an AffTree instance that corresponds to the hard shrink function applied
+/// to the specified ``row``.
+#[allow(non_snake_case)]
+pub fn partial_hard_shrink(dim: usize, row: usize, lambda: f64) -> AffTree<2> {
+    assert!(
+        row < dim,
+        "Expected row <= dim, got row={} <= dim={}",
+        row,
+        dim
+    );
+
+    let mut aff = AffFunc::unit(dim, row);
+    aff.bias[0] = -lambda;
+    let mut dd = AffTree::from_aff(aff);
+
+    let mut aff = AffFunc::unit(dim, row);
+    aff.mat[[0, row]] = -1.0;
+    aff.bias[0] = -lambda;
+
+    let affine_max = AffFunc::identity(dim);
+
+    let n = dd.add_child_node(0, 0, aff);
+    dd.add_child_node(0, 1, affine_max);
+
+    let affine_zero = AffFunc::zero_idx(dim, row);
+    let affine_min = AffFunc::identity(dim);
+
+    dd.add_child_node(n, 1, affine_min);
+    dd.add_child_node(n, 0, affine_zero);
+
+    dd
+}
+
+/// Create an AffTree instance that corresponds to the hard sigmoid function applied
+/// to the specified ``row``.
+#[allow(non_snake_case)]
+pub fn partial_hard_sigmoid(dim: usize, row: usize) -> AffTree<2> {
+    assert!(
+        row < dim,
+        "Expected row <= dim, got row={} <= dim={}",
+        row,
+        dim
+    );
+
+    let mut aff = AffFunc::unit(dim, row);
+    aff.bias[0] = -3.;
+    let mut dd = AffTree::from_aff(aff);
+
+    let mut aff = AffFunc::unit(dim, row);
+    aff.mat[[0, row]] = -1.0;
+    aff.bias[0] = -3.;
+
+    let mut affine_max = AffFunc::zero_idx(dim, row);
+    affine_max.bias[row] = 1.;
+
+    let n = dd.add_child_node(0, 0, aff);
+    dd.add_child_node(0, 1, affine_max);
+
+    let mut affine_id = AffFunc::identity(dim);
+    affine_id.mat[[row, row]] = 1. / 6.;
+    affine_id.bias[row] = 0.5;
+
+    let mut affine_min = AffFunc::zero_idx(dim, row);
+    affine_min.bias[row] = 0.;
+
+    dd.add_child_node(n, 1, affine_min);
+    dd.add_child_node(n, 0, affine_id);
+
+    dd
+}
+
+/// Create an AffTree instance that corresponds to the threshold function applied
+/// to the specified ``row``.
+#[allow(non_snake_case)]
+pub fn partial_threshold(dim: usize, row: usize, threshold: f64, value: f64) -> AffTree<2> {
+    assert!(
+        row < dim,
+        "Expected row <= dim, got row={} <= dim={}",
+        row,
+        dim
+    );
+
+    let mut aff = AffFunc::unit(dim, row);
+    aff.bias[0] = -threshold;
+    let mut dd = AffTree::from_aff(aff);
+
+    let affine_true = AffFunc::identity(dim);
+    let mut affine_false = AffFunc::zero_idx(dim, row);
+    affine_false.bias[row] = value;
+
+    dd.add_child_node(0, 1, affine_true);
+    dd.add_child_node(0, 0, affine_false);
+
+    dd
+}
+
+/// Create an AffTree instance that corresponds to the argmax function.
 /// That is, for an input vector x return the first index that contains the maximal element.
 pub fn argmax(dim: usize) -> AffTree<2> {
     let affine = AffFunc::subtraction(dim, 0, 1);
@@ -97,6 +260,10 @@ pub fn argmax(dim: usize) -> AffTree<2> {
     dd
 }
 
+/// Create an AffTree instance that corresponds to the class characterization.
+/// This is an indicator function that shows if the argmax of its input vector
+/// coincides with the specified ``clazz``, i.e., if the value of the input at
+/// position ``clazz`` is maximal.
 pub fn class_characterization(dim: usize, clazz: usize) -> AffTree<2> {
     assert!(
         clazz < dim,
@@ -170,7 +337,8 @@ pub fn inf_norm(dim: usize, minimum: Option<f64>, maximum: Option<f64>) -> AffTr
 #[cfg(test)]
 mod tests {
 
-    use crate::distill::schema::{class_characterization, inf_norm, partial_ReLU};
+    use super::*;
+    use crate::{distill::afftree::AffTree, linalg::affine::AffFunc};
 
     use super::{argmax, ReLU};
     use approx::assert_relative_eq;
@@ -204,6 +372,13 @@ mod tests {
         assert_relative_eq!(
             relu_dd.evaluate(&arr1(&[1.5, -1., 0., 4.])).unwrap(),
             arr1(&[1.5, 0., 0., 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1.6, 11., 2., 1.])).unwrap(),
+            arr1(&[-0., 11., 2., 1.]),
             epsilon = 1e-08,
             max_relative = 1e-05
         );
@@ -251,6 +426,213 @@ mod tests {
         assert_relative_eq!(
             relu_dd.evaluate(&arr1(&[1.5, -1., 0., 4.])).unwrap(),
             arr1(&[1.5, 0., 0., 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1.6, 11., 2., 1.])).unwrap(),
+            arr1(&[-1.6, 11., 2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+    }
+
+    #[test]
+    pub fn test_partial_leaky_relu_4() {
+        let relu_dd = partial_leaky_ReLU(4, 1, 0.1);
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1., -100., -2., 1000.])).unwrap(),
+            arr1(&[-1., -10., -2., 1000.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1., -3e-03, -2., 1.])).unwrap(),
+            arr1(&[1., -3e-04, -2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.4, 1e-03, 0.3, 4.])).unwrap(),
+            arr1(&[1.4, 1e-03, 0.3, 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.5, -1., 0., 4.])).unwrap(),
+            arr1(&[1.5, -0.1, 0., 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1.6, 11., 2., 1.])).unwrap(),
+            arr1(&[-1.6, 11., 2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+    }
+
+    #[test]
+    pub fn test_partial_hard_tanh_4() {
+        let relu_dd = partial_hard_tanh(4, 1, -5.0, 7.0);
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1., -100., -2., 1000.])).unwrap(),
+            arr1(&[-1., -5., -2., 1000.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1., -3e-03, -2., 1.])).unwrap(),
+            arr1(&[1., -3e-03, -2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.4, 1e-03, 0.3, 4.])).unwrap(),
+            arr1(&[1.4, 1e-03, 0.3, 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.5, -1., 0., 4.])).unwrap(),
+            arr1(&[1.5, -1.0, 0., 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1.6, 11., 2., 1.])).unwrap(),
+            arr1(&[-1.6, 7., 2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+    }
+
+    #[test]
+    pub fn test_partial_hard_shrink_4() {
+        let relu_dd = partial_hard_shrink(4, 1, 0.5);
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1., -100., -2., 1000.])).unwrap(),
+            arr1(&[-1., -100., -2., 1000.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1., -3e-03, -2., 1.])).unwrap(),
+            arr1(&[1., 0., -2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.4, 1e-03, 0.3, 4.])).unwrap(),
+            arr1(&[1.4, 0., 0.3, 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.5, -1., 0., 4.])).unwrap(),
+            arr1(&[1.5, -1., 0., 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1.6, 11., 2., 1.])).unwrap(),
+            arr1(&[-1.6, 11., 2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+    }
+
+    #[test]
+    pub fn test_partial_hard_sigmoid_4() {
+        let relu_dd = partial_hard_sigmoid(4, 1);
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1., -100., -2., 1000.])).unwrap(),
+            arr1(&[-1., 0., -2., 1000.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1., -3e-03, -2., 1.])).unwrap(),
+            arr1(&[1., 0.4995, -2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.4, 6e-03, 0.3, 4.])).unwrap(),
+            arr1(&[1.4, 0.501, 0.3, 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.5, -1.2, 0., 4.])).unwrap(),
+            arr1(&[1.5, 0.3, 0., 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1.6, 11., 2., 1.])).unwrap(),
+            arr1(&[-1.6, 1., 2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+    }
+
+    #[test]
+    pub fn test_partial_threshold_4() {
+        let relu_dd = partial_threshold(4, 1, -0.5, -5.);
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1., -100., -2., 1000.])).unwrap(),
+            arr1(&[-1., -5., -2., 1000.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1., -3e-03, -2., 1.])).unwrap(),
+            arr1(&[1., -3e-03, -2., 1.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.4, 1e-03, 0.3, 4.])).unwrap(),
+            arr1(&[1.4, 1e-03, 0.3, 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[1.5, -1., 0., 4.])).unwrap(),
+            arr1(&[1.5, -5., 0., 4.]),
+            epsilon = 1e-08,
+            max_relative = 1e-05
+        );
+
+        assert_relative_eq!(
+            relu_dd.evaluate(&arr1(&[-1.6, 11., 2., 1.])).unwrap(),
+            arr1(&[-1.6, 11., 2., 1.]),
             epsilon = 1e-08,
             max_relative = 1e-05
         );
@@ -385,8 +767,6 @@ mod tests {
     #[test]
     pub fn test_inf_norm() {
         let inf_dd = inf_norm(4, Some(-2.), Some(5.));
-
-        println!("{}", inf_dd);
 
         assert_relative_eq!(
             inf_dd.evaluate(&arr1(&[1., 2., -1.9, 1.])).unwrap()[0],

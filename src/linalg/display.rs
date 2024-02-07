@@ -99,7 +99,7 @@ pub fn write_inequality<T: Write>(
 
     write_lincomb(f, row, truncate)?;
 
-    write!(f, " <= ")?;
+    write!(f, " ≤ ")?;
 
     if truncate {
         write!(f, "{:.2}", bias)
@@ -143,28 +143,31 @@ pub fn write_lincomb<T: Write>(
     coefficients: Array1<f64>,
     truncate: bool,
 ) -> std::fmt::Result {
-    for (idx, coeff) in enumerate(coefficients.iter().with_position()) {
-        match coeff {
-            First(val) | Only(val) => {
-                if val.is_sign_negative() {
-                    write!(f, "−${} ", idx)?
+    for position in coefficients.iter().enumerate().with_position() {
+        let (idx, coeff) = position.into_inner();
+        match position {
+            First(_) | Only(_) => {
+                if coeff.is_sign_negative() {
+                    write!(f, "−")?
                 } else {
-                    write!(f, " ${} ", idx)?
+                    write!(f, " ")?
                 }
             }
-            Middle(val) | Last(val) => {
-                if val.is_sign_negative() {
-                    write!(f, " −${} ", idx)?
+            Middle(_) | Last(_) => {
+                if coeff.is_sign_negative() {
+                    write!(f, " −")?
                 } else {
-                    write!(f, " +${} ", idx)?
+                    write!(f, " +")?
                 }
             }
         }
         if truncate {
-            write!(f, "{:.2}", coeff.into_inner().abs())?
+            write!(f, "{:.2}", coeff.abs())?
         } else {
-            write!(f, "{}", coeff.into_inner().abs())?
+            write!(f, "{}", coeff.abs())?
         }
+
+        write!(f, " ${}", idx)?;
     }
     Ok(())
 }

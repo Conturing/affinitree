@@ -23,7 +23,7 @@ use std::ops::{self, Add, Mul};
 use itertools::enumerate;
 use ndarray::{self, arr1, Axis};
 use ndarray::{
-    concatenate, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Data, Ix1, Ix2, RawDataClone,
+    concatenate, s, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Data, Ix1, Ix2, RawDataClone,
 };
 
 use crate::linalg::display::{write_aff, write_polytope};
@@ -44,7 +44,6 @@ pub struct FunctionT;
 pub struct PolytopeT;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct AffFuncBase<I, D: Ownership> {
     pub mat: ArrayBase<D, Ix2>,
     pub bias: ArrayBase<D, Ix1>,
@@ -74,6 +73,10 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
         );
         debug_assert!(
             mat.iter().all(|x| x.is_normal() || *x == 0f64),
+            "Non-normal floats are deprecated"
+        );
+        debug_assert!(
+            bias.iter().all(|x| x.is_normal() || *x == 0f64),
             "Non-normal floats are deprecated"
         );
 
@@ -108,98 +111,130 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
 
 // Function specific constructors
 impl<D: Ownership> AffFuncBase<FunctionT, D> {
-    /// Returns the affine function that implements the identity function f(x)=x.
+    /// Create an affine function that implements the identity function f(x)=x.
     #[inline(always)]
     pub fn identity(dim: usize) -> AffFunc {
-        AffFunc {
-            mat: Array2::from_diag_elem(dim, 1f64),
-            bias: Array1::zeros(dim),
-            _phantom: PhantomData,
-        }
+        AffFunc::from_mats(Array2::eye(dim), Array1::zeros(dim))
     }
 
-    /// Returns the affine function that always returns the specified value.
+    /// Create an affine function that implements the zero function f(x)=0.
+    #[inline(always)]
+    pub fn zeros(dim: usize) -> AffFunc {
+        AffFunc::from_mats(Array2::zeros((dim, dim)), Array1::zeros(dim))
+    }
+
+    /// Create an affine function that always returns the specified value.
     #[inline(always)]
     pub fn constant(dim: usize, value: f64) -> AffFunc {
-        let bias = arr1(&[value]);
-        AffFunc {
-            mat: Array2::zeros((1, dim)),
-            bias: bias,
-            _phantom: PhantomData,
-        }
+        AffFunc::from_mats(Array2::zeros((1, dim)), arr1(&[value]))
     }
 
-    /// Returns the affine function that returns the element in the given column.
+    /// Create an affine function that returns the element in the given ``index`` of its input.
     #[inline(always)]
-    pub fn unit(dim: usize, column: usize) -> AffFunc {
+    pub fn unit(dim: usize, index: usize) -> AffFunc {
         let mut mat = Array2::zeros((1, dim));
-        mat[[0, column]] = 1.;
-        AffFunc {
-            mat: mat,
-            bias: Array1::zeros(1),
-            _phantom: PhantomData,
-        }
+        mat[[0, index]] = 1.;
+
+        AffFunc::from_mats(mat, Array1::zeros(1))
     }
 
-    /// Returns the affine function that sets the element at index to zero and leaves all other elements unchanged.
+    /// Create an affine function that sets the element at the given index to zero
+    /// and leaves all other elements unchanged.
     #[inline(always)]
     pub fn zero_idx(dim: usize, index: usize) -> AffFunc {
         let mut mat = Array2::eye(dim);
         mat[[index, index]] = 0.;
-        AffFunc {
-            mat: mat,
-            bias: Array1::zeros(dim),
-            _phantom: PhantomData,
-        }
+
+        AffFunc::from_mats(mat, Array1::zeros(dim))
     }
 
-    /// Returns the affine function R^dim -> R that sums all inputs.
+    /// Create an affine function R^dim -> R that returns the sum
+    /// over all its inputs.
     #[inline(always)]
     pub fn sum(dim: usize) -> AffFunc {
-        AffFunc {
-            mat: Array2::ones((1, dim)),
-            bias: Array1::zeros(1),
-            _phantom: PhantomData,
-        }
+        AffFunc::from_mats(Array2::ones((1, dim)), Array1::zeros(1))
     }
 
-    /// Returns the affine function that subtracts the right index from the left index.
+    /// Create an affine function that subtracts the right index from the left index.
     #[inline(always)]
     pub fn subtraction(dim: usize, left: usize, right: usize) -> AffFunc {
         let mut matrix = Array2::zeros((1, dim));
         matrix[[0, left]] = 1.;
         matrix[[0, right]] = -1.;
         let bias = Array1::zeros(1);
-        AffFunc {
-            mat: matrix,
-            bias: bias,
-            _phantom: PhantomData,
-        }
+
+        AffFunc::from_mats(matrix, bias)
+    }
+
+    /// Create an affine function that rotates the space as specified
+    /// by the given orthogonal matrix ``rotator``.
+    #[inline(always)]
+    pub fn rotation(rotator: Array2<f64>) -> AffFunc {
+        assert_eq!(rotator.shape()[0], rotator.shape()[1]);
+        let dim = rotator.shape()[0];
+
+        AffFunc::from_mats(rotator, Array1::zeros(dim))
+    }
+
+    /// Create an affine function that scales vectors uniformly along
+    /// all axis.
+    #[inline(always)]
+    pub fn uniform_scaling(dim: usize, scalar: f64) -> AffFunc {
+        AffFunc::scaling(&Array1::from_elem(dim, scalar))
+    }
+
+    /// Create an affine function that scales vectors.
+    #[inline(always)]
+    pub fn scaling(scalars: &Array1<f64>) -> AffFunc {
+        AffFunc::from_mats(
+            Array2::from_diag(scalars),
+            Array1::zeros(scalars.shape()[0]),
+        )
+    }
+
+    /// Create an affine function that slices inputs along specified axes.
+    /// For each axis were ``reference_point`` is NaN, the corresponding axis will be kept.
+    /// For each other axis, the axis is fixed with the value specified in ``reference_point``.
+    #[inline(always)]
+    pub fn slice(reference_point: &Array1<f64>) -> AffFunc {
+        let input_mask = reference_point.map(|x| if x.is_nan() { 1. } else { 0. });
+        let fixed_values = reference_point.map(|x| if x.is_nan() { 0. } else { *x });
+
+        AffFuncBase::<FunctionT, Owned>::from_mats(Array2::from_diag(&input_mask), fixed_values)
+    }
+
+    /// Create an affine function that translates vectors by the given ``offset``.
+    #[inline(always)]
+    pub fn translation(dim: usize, offset: Array1<f64>) -> AffFunc {
+        AffFuncBase::<FunctionT, Owned>::from_mats(Array2::zeros((offset.shape()[0], dim)), offset)
     }
 }
 
 // Polytope specific constructors
 impl<D: Ownership> AffFuncBase<PolytopeT, D> {
+    /// Constructs a polytope that contains the complete ambient `dim`-dimensional space.
     #[inline(always)]
     pub fn unrestricted(dim: usize) -> Polytope {
         Polytope::from_mats(Array2::zeros((1, dim)), Array1::ones(1))
     }
 
-    /// Create a polytope from a set of halfspaces described by normal vectors and points in the plane (hesse normal form).
+    /// Creates a polytope from a set of halfspaces described by ``normal_vectors`` and ``points`` in the plane (hesse normal form).
     #[inline(always)]
-    pub fn from_normal(normal_vectors: Array2<f64>, distance_vectors: Array2<f64>) -> Polytope {
-        let bias = (&normal_vectors).mul(&distance_vectors).sum_axis(Axis(1));
+    pub fn from_normal(normal_vectors: Array2<f64>, points: Array2<f64>) -> Polytope {
+        let bias = (&normal_vectors).mul(&points).sum_axis(Axis(1));
         Polytope::from_mats(-normal_vectors, -bias)
     }
 
-    /// Constructs a dim dimensional hypercube centered at the origin.
-    /// In each dimension two hyperplanes are placed with distance +/- radius from the origin.
+    /// Creates a `dim`-dimensional hypercube centered at the origin.
+    /// In each dimension two hyperplanes are placed with distance +/- `radius` from the origin.
     pub fn hypercube(dim: usize, radius: f64) -> Polytope {
         let mat: Array2<f64> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
         let bias: Array1<f64> = radius * Array1::<f64>::ones(2 * dim);
         Polytope::from_mats(mat, bias)
     }
 
+    /// Creates a `dim`-dimensional hyperrectangle centered at the origin.
+    /// The distances from the origin to the faces of the rectangle are given by `intervals` in order of the axes.
     pub fn hyperrectangle(dim: usize, intervals: &[(f64, f64)]) -> Polytope {
         let mat: Array2<f64> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
         let mut bias: Array1<f64> = Array1::<f64>::zeros(2 * dim);
@@ -242,14 +277,14 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
             row,
             self.outdim()
         );
-        AffFuncBase::<I, Owned> {
-            mat: self.mat.row(row).to_owned().insert_axis(Axis(0)),
-            bias: Array1::from_elem(1, self.bias[row]),
-            _phantom: PhantomData,
-        }
+        AffFuncBase::<I, Owned>::from_mats(
+            self.mat.row(row).insert_axis(Axis(0)).to_owned(),
+            self.bias.slice(s![row]).insert_axis(Axis(0)).to_owned(),
+        )
     }
 
-    /// Iterate over the rows of the matrix and bias.
+    /// Iterate over the rows of this AffFuncBase instance.
+    /// Elements are returned as views.
     pub fn row_iter(&self) -> impl Iterator<Item = AffFuncBase<I, Owned>> + '_ {
         zip(self.mat.outer_iter(), self.bias.outer_iter()).map(|(row, bias)| {
             AffFuncBase::<I, Owned>::from_mats(
@@ -337,57 +372,52 @@ impl<D: Ownership> AffFuncBase<FunctionT, D> {
     /// );
     /// ```
     pub fn compose(&self, other: &AffFuncBase<FunctionT, D>) -> AffFunc {
-        assert!(
-            self.indim() == other.outdim(),
-            "Dimensions of functions mismatch for composition: {} to {}",
+        assert_eq!(
+            self.indim(),
+            other.outdim(),
+            "Invalid shared dimensions for composition: {} and {}",
             self.indim(),
             other.outdim()
         );
-        AffFunc {
-            mat: self.mat.dot(&other.mat),
-            bias: self.apply(&other.bias),
-            _phantom: PhantomData,
-        }
+        AffFunc::from_mats(self.mat.dot(&other.mat), self.apply(&other.bias))
     }
 
     pub fn stack(&self, other: &AffFuncBase<FunctionT, D>) -> AffFunc {
-        assert!(
-            self.indim() == other.indim(),
-            "Dimensions of functions mismatch for stacking: {} to {}",
+        assert_eq!(
+            self.indim(),
+            other.indim(),
+            "Invalid input dimensions for stacking: {} and {}",
             self.indim(),
             other.indim()
         );
-        AffFunc {
-            mat: concatenate![Axis(0), self.mat, other.mat],
-            bias: concatenate![Axis(0), self.bias, other.bias],
-            _phantom: PhantomData,
-        }
+        AffFunc::from_mats(
+            concatenate![Axis(0), self.mat, other.mat],
+            concatenate![Axis(0), self.bias, other.bias],
+        )
     }
 
     pub fn add(self, other: &AffFuncBase<FunctionT, D>) -> AffFunc {
-        assert!(
-            self.indim() == other.indim() && self.outdim() == other.outdim(),
-            "Dimensions of functions mismatch for adding: {} -> {} and {} -> {}",
+        assert_eq!(
             self.indim(),
+            other.indim(),
+            "Invalid input dimensions for adding: {} and {}",
+            self.indim(),
+            self.outdim()
+        );
+        assert_eq!(
             self.outdim(),
+            other.outdim(),
+            "Invalid output dimensions for adding: {} and {}",
             other.indim(),
             other.outdim()
         );
-        AffFunc {
-            mat: self.mat.add(&other.mat),
-            bias: self.bias.add(&other.bias),
-            _phantom: PhantomData,
-        }
+        AffFunc::from_mats(self.mat.add(&other.mat), self.bias.add(&other.bias))
     }
 }
 
 impl AffFunc {
     pub fn negate(self) -> AffFunc {
-        AffFunc {
-            mat: -self.mat.clone(),
-            bias: -self.bias,
-            _phantom: PhantomData,
-        }
+        AffFunc::from_mats(-self.mat.clone(), -self.bias)
     }
 }
 
@@ -785,10 +815,10 @@ mod tests {
         assert_eq!(
             fs,
             vec![
-                AffFunc::from_mats(arr2(&[[1., 0., 0., 0.]]), arr1(&[1.])),
-                AffFunc::from_mats(arr2(&[[0., 1., 0., 0.]]), arr1(&[2.])),
-                AffFunc::from_mats(arr2(&[[0., 0., 1., 0.]]), arr1(&[3.])),
-                AffFunc::from_mats(arr2(&[[0., 0., 0., 1.]]), arr1(&[4.]))
+                aff!([1., 0., 0., 0.] + 1.),
+                aff!([0., 1., 0., 0.] + 2.),
+                aff!([0., 0., 1., 0.] + 3.),
+                aff!([0., 0., 0., 1.] + 4.)
             ]
         )
     }
