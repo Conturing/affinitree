@@ -27,8 +27,8 @@ use super::{
     iter::PolyhedraIter,
     node::{write_children, AffContent},
 };
-use crate::distill::iter::PolyhedraGen;
-use crate::distill::node::AffNode;
+use crate::core::iter::PolyhedraGen;
+use crate::core::node::AffNode;
 use crate::linalg::affine::{AffFunc, Polytope};
 use crate::linalg::polyhedron::PolytopeStatus;
 use crate::tree::graph::{Label, Tree, TreeIndex};
@@ -58,7 +58,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex};
 ///
 /// This tree is constructed in `affinitree` as follows:
 /// ```rust
-/// use affinitree::{aff, poly, distill::afftree::AffTree, distill::dot::dot_str, linalg::affine::PolyRepr};
+/// use affinitree::{aff, poly, core::afftree::AffTree, core::dot::dot_str, linalg::affine::PolyRepr};
 ///
 /// // construct a new AffTree instance with the given inequality as its root.
 /// let mut dd = AffTree::<2>::from_aff(poly!([[1, 1]] < [0]).convert_to(PolyRepr::MatrixBiasGeqZero)); // node index 0
@@ -109,7 +109,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex};
 /// Roughly speaking, the composition of two AffTree instances corresponds to an sequential evaluation of the two trees, as demonstrated by the following example.
 ///
 /// ```rust
-/// use affinitree::{aff, distill::afftree::AffTree};
+/// use affinitree::{aff, core::afftree::AffTree};
 /// use ndarray::arr1;
 ///
 /// let mut tree0 = AffTree::<2>::from_aff(aff!([[1., 0.]] + [2.]));
@@ -260,7 +260,7 @@ impl<const K: usize> AffTree<K> {
     /// # Examples
     ///
     /// ```
-    /// use affinitree::distill::afftree::AffTree;
+    /// use affinitree::core::afftree::AffTree;
     /// use affinitree::linalg::affine::{AffFunc, Polytope};
     ///
     /// let aff_tree = AffTree::<2>::from_aff(AffFunc::identity(2));
@@ -449,7 +449,7 @@ impl<const K: usize> AffTree<K> {
     /// # Example
     ///
     /// ```rust
-    /// use affinitree::{aff, distill::afftree::AffTree};
+    /// use affinitree::{aff, core::afftree::AffTree};
     /// use ndarray::arr1;
     ///
     /// let mut tree0 = AffTree::<2>::from_aff(aff!([[1., 0.]] + [2.]));
@@ -770,7 +770,7 @@ mod tests {
     use super::AffTree;
     use crate::{
         aff,
-        distill::{iter::PolyhedraIter, schema},
+        core::{iter::PolyhedraIter, schema},
         linalg::affine::{AffFunc, PolyRepr, Polytope},
         path, poly,
     };

@@ -15,5 +15,5 @@
 //! Collection of linear algebra structs and methods
 
 pub mod affine;
-pub mod display;
 pub mod polyhedron;
+pub mod vis;

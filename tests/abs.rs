@@ -4,7 +4,7 @@
 /// correctness on some inputs.
 #[cfg(test)]
 mod tests {
-    use affinitree::distill::afftree::AffTree;
+    use affinitree::core::afftree::AffTree;
     use affinitree::linalg::affine::PolyRepr;
     use affinitree::{aff, poly};
 

@@ -25,8 +25,8 @@ use itertools::Itertools;
 use ndarray_npy::{NpzReader, ReadNpyError, ReadNpzError};
 use regex::Regex;
 
-use crate::distill::afftree::AffTree;
-use crate::distill::schema::{
+use crate::core::afftree::AffTree;
+use crate::core::schema::{
     argmax as argmax_dd, class_characterization as class_char_dd, partial_ReLU,
 };
 use crate::linalg::affine::AffFunc;
@@ -159,7 +159,7 @@ pub fn read_layers<P: AsRef<Path>>(path: &P) -> Result<Vec<Layer>, ReadNpzError>
 #[cfg(test)]
 mod tests {
 
-    use crate::distill::builder::{afftree_from_layers, read_layers};
+    use crate::core::builder::{afftree_from_layers, read_layers};
     use approx::assert_relative_eq;
     use ndarray::arr1;
     use std::path::Path;

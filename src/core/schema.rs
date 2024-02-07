@@ -14,7 +14,7 @@
 
 //! A collection of common piece-wise linear functions like activation functions
 
-use crate::distill::afftree::AffTree;
+use crate::core::afftree::AffTree;
 use crate::linalg::affine::AffFunc;
 
 use ndarray::{Array1, Array2};
@@ -338,7 +338,7 @@ pub fn inf_norm(dim: usize, minimum: Option<f64>, maximum: Option<f64>) -> AffTr
 mod tests {
 
     use super::*;
-    use crate::{distill::afftree::AffTree, linalg::affine::AffFunc};
+    use crate::{core::afftree::AffTree, linalg::affine::AffFunc};
 
     use super::{argmax, ReLU};
     use approx::assert_relative_eq;

@@ -59,7 +59,7 @@ Terminals store the actual linear functions using matrices.
 
 An empty `AffTree` can be constructed by calling on of the constructors:
 ```rust
-use affinitree::distill::afftree::AffTree;
+use affinitree::core::afftree::AffTree;
 
 let dd1 = AffTree::<2>::new();
 let dd2 = AffTree::<2>::with_capacity(32);
@@ -88,7 +88,7 @@ To apply ReLU to our linear function, we first have to construct a decision tree
 Luckily, these are already predefined.
 
 ```rust
-use affinitree::distill::schema::ReLU;
+use affinitree::core::schema::ReLU;
 
 let relu = ReLU(1);
 dd.compose(&relu);
@@ -106,7 +106,7 @@ For its test cases `affinitree` comes with a handful of pre-trained networks sto
 For example, the mnist.npz file contains a pre-trained network over the first seven principal components of the MNIST data set with the layer structure 7-5-5-5-10.
 
 ```rust
-use affinitree::distill::builder::{read_layers, afftree_from_layers};
+use affinitree::core::builder::{read_layers, afftree_from_layers};
 
 // load a sequence of pretrained layers from a numpy file
 let layers = read_layers(&"res/nn/mnist-5-5.npz").unwrap();
