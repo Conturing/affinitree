@@ -74,7 +74,7 @@ impl DfsPre {
             self.stack.push(DfsNodeData {
                 depth: data.depth + 1,
                 index: *child,
-                n_remaining: n_remaining,
+                n_remaining,
             });
             self.last_push += 1;
         }
@@ -109,6 +109,15 @@ impl<'a, N, const K: usize> DfsPreIter<'a, N, K> {
             iter: DfsPre::new(tree),
             tree,
             size_lb: tree.len(),
+            size_ub: tree.len(),
+        }
+    }
+
+    pub fn with_root(tree: &Tree<N, K>, root: TreeIndex) -> DfsPreIter<'_, N, K> {
+        DfsPreIter {
+            iter: DfsPre::with_root(tree, root),
+            tree,
+            size_lb: 0,
             size_ub: tree.len(),
         }
     }
@@ -156,9 +165,9 @@ impl<'a, N, const K: usize> DFSEdgeIter<'a, N, K> {
             last_push += 1;
         }
         DFSEdgeIter {
-            tree: tree,
-            stack: stack,
-            last_push: last_push,
+            tree,
+            stack,
+            last_push,
         }
     }
 
@@ -189,7 +198,7 @@ impl<'a, N, const K: usize> Iterator for DFSEdgeIter<'a, N, K> {
             EdgeReference {
                 source_idx: src_idx,
                 source_value: self.tree.node_value(src_idx).unwrap(),
-                label: label,
+                label,
                 target_idx: dest_idx,
                 target_value: self.tree.node_value(dest_idx).unwrap(),
             },

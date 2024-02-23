@@ -14,13 +14,18 @@
 
 //! Feasibility tests for polytopes based on LP solving
 
+#[cfg(feature = "minilp")]
 use minilp::{Problem, Variable};
+
+#[cfg(feature = "highs")]
+use highs::{self, Col, HighsModelStatus, RowProblem, Sense, SolvedModel};
 
 use ndarray::{self, Array1};
 use std::iter::zip;
 
 use super::affine::Polytope;
 
+#[cfg(feature = "minilp")]
 #[derive(Clone, Debug)]
 pub struct LinearProgram {
     pub solver: Problem,
@@ -35,8 +40,9 @@ pub enum PolytopeStatus {
     Error(String),
 }
 
-/* LP solving */
+/// # LP solving
 impl Polytope {
+    /// Tests if the polytope is feasible.
     #[inline]
     pub fn is_feasible(&self) -> bool {
         match self.status() {
@@ -46,25 +52,18 @@ impl Polytope {
         }
     }
 
+    /// Tests if the polytope is feasible
     #[inline]
     pub fn status(&self) -> PolytopeStatus {
-        self.status_minilp()
+        self.solve_linprog(Array1::zeros(self.mat.raw_dim()[1]), false)
     }
 
-    #[inline]
-    pub fn status_minilp(&self) -> PolytopeStatus {
-        match self.solve_linprog_minilp(Array1::zeros(self.mat.raw_dim()[1]), false) {
-            Ok((_, sol)) => PolytopeStatus::Optimal(sol),
-            Err(minilp::Error::Infeasible) => PolytopeStatus::Infeasible,
-            Err(minilp::Error::Unbounded) => PolytopeStatus::Unbounded,
-        }
-    }
-
-    pub fn solve_linprog_minilp(
-        &self,
-        coeffs: Array1<f64>,
-        _verbose: bool,
-    ) -> Result<(minilp::Solution, Array1<f64>), minilp::Error> {
+    /// Solves a linear program built form this polytope and coeffs as target func.
+    /// Concretely, the resulting linear program is
+    /// min coeffs.T x
+    /// s.t. mat x <= bias
+    #[cfg(feature = "minilp")]
+    pub fn solve_linprog(&self, coeffs: Array1<f64>, _verbose: bool) -> PolytopeStatus {
         let problem = self.as_linprog(coeffs);
         let pb = problem.solver;
         let vars = problem.vars;
@@ -72,9 +71,10 @@ impl Polytope {
         match pb.solve() {
             Ok(sol) => {
                 let wit = Array1::from_iter(vars.iter().map(|var| sol[*var]));
-                Ok((sol, wit))
+                PolytopeStatus::Optimal(wit)
             }
-            Err(x) => Err(x),
+            Err(minilp::Error::Infeasible) => PolytopeStatus::Infeasible,
+            Err(minilp::Error::Unbounded) => PolytopeStatus::Unbounded,
         }
     }
 
@@ -82,6 +82,7 @@ impl Polytope {
     /// Concretly, the resulting linear program is
     /// min coeffs.T x
     /// s.t. mat x <= bias
+    #[cfg(feature = "minilp")]
     pub fn as_linprog(&self, cost_function: Array1<f64>) -> LinearProgram {
         use minilp::{ComparisonOp, OptimizationDirection};
 
@@ -102,9 +103,81 @@ impl Polytope {
             pb.add_constraint(constraint.as_slice(), ComparisonOp::Le, *bias);
         }
 
-        LinearProgram {
-            solver: pb,
-            vars: vars,
+        // print!("{:?}", solved.status());
+        // print!("{}", solved.get_solution().columns()[0]);
+        LinearProgram { solver: pb, vars }
+    }
+
+    /// Solves a linear program built form this polytope and coeffs as target func.
+    /// Concretely, the resulting linear program is
+    /// min coeffs.T x
+    /// s.t. mat x <= bias
+    #[cfg(feature = "highs")]
+    pub fn solve_linprog(&self, coeffs: Array1<f64>, verbose: bool) -> PolytopeStatus {
+        let mut pb = RowProblem::default();
+
+        // create the variables for the linear program (objective function + variable bounds)
+        let vars: Vec<Col> = coeffs
+            .iter()
+            .map(|x| pb.add_column::<f64, _>(*x, ..))
+            .collect();
+
+        // add linear constraints
+        for (row, bias) in zip(self.mat.rows(), &self.bias) {
+            let constraint: Vec<(Col, f64)> =
+                zip(&vars, row).map(|(var, coeff)| (*var, *coeff)).collect();
+
+            // set bias as upper bound (inclusive) of the linear constraint
+            pb.add_row(..=*bias, constraint)
+        }
+
+        let mut model = pb.optimise(Sense::Minimise);
+        // Performance improvement of around 10%
+        model.set_option("threads", 1);
+
+        // Presolver does not work in our case
+        //TODO: test this option
+        // presolve detects trivial infeasibilities and is atually needed in such cases
+        // model.set_option("presolve", "on");
+        model.set_option("presolve", "off");
+
+        if verbose {
+            model.set_option("output_flag", true);
+            model.set_option("log_to_console", true);
+            model.set_option("log_dev_level", 2);
+        }
+
+        // Possible options to configure highs
+        // model.set_option("parallel", "on");
+        // model.set_option("solver", "simplex");
+
+        let solved = model.solve();
+        let val = solved.status();
+        match val {
+            HighsModelStatus::NotSet
+            | HighsModelStatus::LoadError
+            | HighsModelStatus::ModelError
+            | HighsModelStatus::PresolveError
+            | HighsModelStatus::SolveError
+            | HighsModelStatus::PostsolveError
+            | HighsModelStatus::ReachedTimeLimit
+            | HighsModelStatus::ReachedIterationLimit
+            | HighsModelStatus::Unknown
+            | HighsModelStatus::ModelEmpty
+            | HighsModelStatus::ObjectiveBound
+            | HighsModelStatus::ObjectiveTarget => {
+                PolytopeStatus::Error(format!("Error {:?}", val))
+            }
+            HighsModelStatus::Infeasible => PolytopeStatus::Infeasible,
+            HighsModelStatus::UnboundedOrInfeasible | HighsModelStatus::Unbounded => {
+                PolytopeStatus::Unbounded
+            }
+            HighsModelStatus::Optimal => {
+                //TODO optimize the conversion if necessary
+                let solution_vals = solved.get_solution();
+                let solution_f64 = Array1::from_iter(solution_vals.columns().iter().copied());
+                PolytopeStatus::Optimal(solution_f64)
+            }
         }
     }
 }
@@ -112,17 +185,26 @@ impl Polytope {
 #[cfg(test)]
 mod tests {
     use crate::linalg::polyhedron::Polytope;
+    use crate::linalg::polyhedron::PolytopeStatus;
     use crate::poly;
     use approx::assert_relative_eq;
 
+    #[cfg(feature = "highs")]
+    use highs::{HighsModelStatus, RowProblem, Sense};
+
     use ndarray::{arr1, arr2, array, s, Array1};
 
+    #[cfg(feature = "minilp")]
     fn init_logger() {
         // minilp has a bug if logging is enabled
-        // match fast_log::init(Config::new().console().chan_len(Some(100000))) {
-        //     Ok(_) => (),
-        //     Err(err) => println!("Error occurred while configuring logger: {:?}", err),
-        // }
+    }
+
+    #[cfg(feature = "highs")]
+    fn init_logger() {
+        match fast_log::init(fast_log::Config::new().console().chan_len(Some(100000))) {
+            Ok(_) => (),
+            Err(err) => println!("Error occurred while configuring logger: {:?}", err),
+        }
     }
 
     #[test]
@@ -381,6 +463,29 @@ mod tests {
         assert!(poly.is_feasible());
     }
 
+    #[cfg(feature = "highs")]
+    #[test]
+    pub fn test_highs() {
+        init_logger();
+
+        let mut pb = RowProblem::default();
+        let x = pb.add_column(0., f64::NEG_INFINITY..f64::INFINITY);
+        let y = pb.add_column(0., f64::NEG_INFINITY..f64::INFINITY);
+        let z = pb.add_column(0., f64::NEG_INFINITY..f64::INFINITY);
+
+        pb.add_row(..=-6, &[(x, 5.), (y, 1.), (z, 6.)]);
+        pb.add_row(..=2, &[(x, -0.), (y, -1.), (z, 0.)]);
+        pb.add_row(..=-20, &[(x, -6.), (y, 2.), (z, 20.)]);
+
+        let mut model = pb.optimise(Sense::Maximise);
+        model.set_option("presolve", "off");
+        let solved = model.solve();
+        let status = solved.status();
+        let solution = solved.get_solution();
+        println!("{:?}, {:?}", status, solution.columns());
+        assert!(status != HighsModelStatus::Unknown);
+    }
+
     #[test]
     pub fn test_solve_feasible() {
         let poly = poly!(
@@ -395,7 +500,10 @@ mod tests {
             ] < [-1, -1.5, -1, 0, 6, 4, 3]
         );
 
-        assert!(poly.solve_linprog_minilp(Array1::zeros(2), false).is_ok());
+        assert!(matches!(
+            poly.solve_linprog(Array1::zeros(2), false),
+            PolytopeStatus::Optimal(_)
+        ));
     }
 
     #[test]
@@ -412,7 +520,10 @@ mod tests {
             ] < [5, -2, 0.5, 30, 28, -4, 5]
         );
 
-        assert!(poly.solve_linprog_minilp(Array1::zeros(2), false).is_ok());
+        assert!(matches!(
+            poly.solve_linprog(Array1::zeros(2), false),
+            PolytopeStatus::Optimal(_)
+        ));
     }
 
     #[test]
@@ -430,7 +541,246 @@ mod tests {
             ] < [-1, -1, 4, 4, -3, 6, -2, -8]
         );
 
-        assert!(poly.solve_linprog_minilp(Array1::zeros(2), false).is_ok());
+        assert!(matches!(
+            poly.solve_linprog(Array1::zeros(2), false),
+            PolytopeStatus::Optimal(_)
+        ));
+    }
+
+    // The following two tests check whether the HIGHS configuration fails with simple linear programs
+
+    #[cfg(feature = "highs")]
+    #[test]
+    pub fn test_row_problem() {
+        init_logger();
+
+        use highs::*;
+        let mut pb = RowProblem::new();
+
+        let x = pb.add_column(3., ..6);
+        let y = pb.add_column(-2., 5..);
+        pb.add_row(2.., &[(x, 3.), (y, 8.)]); // 2 <= x*3 + y*8
+        pb.add_row(..3, &[(x, 0.), (y, -2.)]);
+        pb.add_row(..2, &[(y, 0.), (x, 1.)]);
+        pb.add_row(..6, &[(x, 0.), (y, -4.)]);
+
+        print!("{pb:?}");
+
+        let mut model = pb.optimise(Sense::Minimise);
+        model.set_option("threads", 1);
+        model.set_option("presolve", "off");
+
+        let solved = model.solve();
+
+        print!("{solved:?}");
+    }
+
+    #[test]
+    pub fn test_polytope_status_0() {
+        init_logger();
+
+        let weights = arr2(&[
+            [
+                0.30361074209213257,
+                -0.4362505376338959,
+                0.47955194115638733,
+                0.17859648168087006,
+            ],
+            [
+                -0.609990656375885,
+                -0.4114791750907898,
+                0.7140181064605713,
+                0.6034472584724426,
+            ],
+            [
+                -0.6196367144584656,
+                0.3565647304058075,
+                -0.06185908988118172,
+                -0.6381561160087585,
+            ],
+            [
+                0.4521157741546631,
+                -0.46737807989120483,
+                0.1406061202287674,
+                0.5742049813270569,
+            ],
+            [
+                -0.26851293444633484,
+                0.278455525636673,
+                -0.6617708802223206,
+                0.12146630883216858,
+            ],
+            [
+                0.2860890030860901,
+                -0.3795221745967865,
+                0.2328789383172989,
+                -0.4218177795410156,
+            ],
+            [
+                0.15694883465766907,
+                0.43815314769744873,
+                0.19395361840724945,
+                -1.0046908855438232,
+            ],
+        ]);
+        let bias = arr1(&[
+            0.009999999776482582,
+            0.21777614951133728,
+            -0.09026645123958588,
+            0.009999999776482582,
+            0.05117252469062805,
+            0.009999999776482582,
+            -0.1,
+        ]);
+
+        let poly = Polytope::from_mats(weights, bias);
+        assert!(!matches!(poly.status(), PolytopeStatus::Infeasible));
+    }
+
+    #[test]
+    #[ignore = "error in rust version of highs solver"]
+    pub fn test_polytope_status_1() {
+        init_logger();
+
+        let weights = arr2(&[
+            [
+                0.30361074209213257,
+                -0.4362505376338959,
+                0.47955194115638733,
+                0.17859648168087006,
+            ],
+            [
+                -0.609990656375885,
+                -0.4114791750907898,
+                0.7140181064605713,
+                0.6034472584724426,
+            ],
+            [
+                -0.6196367144584656,
+                0.3565647304058075,
+                -0.06185908988118172,
+                -0.6381561160087585,
+            ],
+            [
+                0.4521157741546631,
+                -0.46737807989120483,
+                0.1406061202287674,
+                0.5742049813270569,
+            ],
+            [
+                -0.26851293444633484,
+                0.278455525636673,
+                -0.6617708802223206,
+                0.12146630883216858,
+            ],
+            [
+                0.2860890030860901,
+                -0.3795221745967865,
+                0.2328789383172989,
+                -0.4218177795410156,
+            ],
+            [
+                0.15694883465766907,
+                0.43815314769744873,
+                0.19395361840724945,
+                -1.0046908855438232,
+            ],
+        ]);
+        let bias = arr1(&[
+            0.009999999776482582,
+            0.21777614951133728,
+            -0.09026645123958588,
+            0.009999999776482582,
+            0.05117252469062805,
+            0.009999999776482582,
+            -0.1943315714597702,
+        ]);
+
+        let poly = Polytope::from_mats(weights, bias);
+        assert!(!matches!(poly.status(), PolytopeStatus::Infeasible));
+    }
+
+    #[test]
+    pub fn test_polytope_status_2() {
+        init_logger();
+
+        let weights = arr2(&[
+            [
+                0.30361074209213257,
+                -0.4362505376338959,
+                0.47955194115638733,
+                0.17859648168087006,
+            ],
+            [
+                -0.609990656375885,
+                -0.4114791750907898,
+                0.7140181064605713,
+                0.6034472584724426,
+            ],
+            [
+                -0.6196367144584656,
+                0.3565647304058075,
+                -0.06185908988118172,
+                -0.6381561160087585,
+            ],
+            [
+                -0.4521157741546631,
+                0.46737807989120483,
+                -0.1406061202287674,
+                -0.5742049813270569,
+            ],
+            [
+                0.26851293444633484,
+                -0.278455525636673,
+                0.6617708802223206,
+                -0.12146630883216858,
+            ],
+            [
+                -0.2860890030860901,
+                0.3795221745967865,
+                -0.2328789383172989,
+                0.4218177795410156,
+            ],
+            [
+                0.15694883465766907,
+                0.43815314769744873,
+                0.19395361840724945,
+                -1.0046908855438232,
+            ],
+            [
+                -0.12349238991737366,
+                0.0022206550929695368,
+                0.5541185140609741,
+                -0.5391226410865784,
+            ],
+            [
+                -0.07354876399040222,
+                0.6130779385566711,
+                -0.5336642265319824,
+                0.5246383547782898,
+            ],
+            [
+                0.8576876672897056,
+                -0.26357735880021815,
+                -0.15968780062118348,
+                0.5470196019665636,
+            ],
+        ]);
+        let bias = arr1(&[
+            0.009999999776482582,
+            0.21777614951133728,
+            -0.09026645123958588,
+            -0.009999999776482582,
+            -0.05117252469062805,
+            -0.009999999776482582,
+            -0.1943315714597702,
+            -0.17030474543571472,
+            -0.2569865584373474,
+            -0.25349966740775787,
+        ]);
+
+        let poly = Polytope::from_mats(weights, bias);
+        assert!(matches!(poly.status(), PolytopeStatus::Infeasible));
     }
 
     #[test]
@@ -442,10 +792,15 @@ mod tests {
 
         let (p, c) = poly.chebyshev_center();
 
-        let (_, sol) = p.solve_linprog_minilp(c, false).unwrap();
+        let sol = p.solve_linprog(c, false);
+
+        let wit = match sol {
+            PolytopeStatus::Optimal(wit) => wit,
+            _ => panic!(),
+        };
 
         assert_relative_eq!(
-            sol,
+            wit,
             array![0., 0., 1.],
             epsilon = 1e-08,
             max_relative = 1e-02
@@ -461,12 +816,17 @@ mod tests {
 
         let (p, c) = poly.chebyshev_center();
 
-        let (_, sol) = p.solve_linprog_minilp(c, false).unwrap();
+        let sol = p.solve_linprog(c, false);
 
-        assert!(0.0 <= sol[0]);
-        assert!(sol[0] <= 1.0);
-        assert_eq!(sol[1], 0.0);
-        assert_eq!(sol[2], 1.0);
+        let wit = match sol {
+            PolytopeStatus::Optimal(wit) => wit,
+            _ => panic!(),
+        };
+
+        assert!(0.0 <= wit[0]);
+        assert!(wit[0] <= 1.0);
+        assert_eq!(wit[1], 0.0);
+        assert_eq!(wit[2], 1.0);
     }
 
     #[test]
@@ -475,10 +835,15 @@ mod tests {
 
         let (p, c) = poly.chebyshev_center();
 
-        let (_, sol) = p.solve_linprog_minilp(c, false).unwrap();
+        let sol = p.solve_linprog(c, false);
+
+        let wit = match sol {
+            PolytopeStatus::Optimal(wit) => wit,
+            _ => panic!(),
+        };
 
         assert_relative_eq!(
-            sol,
+            wit,
             array![0., -1.414, 1.],
             epsilon = 1e-08,
             max_relative = 1e-02

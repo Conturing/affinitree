@@ -6,8 +6,8 @@
 /// which the terminals are reached are logged.
 #[cfg(test)]
 mod tests {
-    use affinitree::core::builder::Layer;
-    use affinitree::core::builder::{afftree_from_layers, read_layers};
+    use affinitree::distill::builder::Layer;
+    use affinitree::distill::builder::{afftree_from_layers, read_layers};
     use approx::assert_relative_eq;
     use itertools::Itertools;
     use ndarray::{Array, Array1};
@@ -21,7 +21,7 @@ mod tests {
         let mut val = input.to_owned();
         for layer in layers {
             match layer {
-                Layer::ReLU => val = val.map(|x| x.max(0.)),
+                Layer::ReLU(_) => val = val.map(|x| x.max(0.)),
                 Layer::Linear(func) => val = func.apply(&val),
                 _ => panic!("Unsupported operation"),
             }
@@ -33,7 +33,7 @@ mod tests {
     pub fn test_equivalence_iris_dnn() {
         let layers = read_layers(&Path::new("tests/iris_44.npz")).unwrap();
 
-        let dd = afftree_from_layers(4, &layers);
+        let dd = afftree_from_layers(4, &layers, None);
 
         let normal = Normal::new(0., 1.).unwrap();
         let mut r = rand::rngs::OsRng;

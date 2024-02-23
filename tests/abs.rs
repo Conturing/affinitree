@@ -4,8 +4,8 @@
 /// correctness on some inputs.
 #[cfg(test)]
 mod tests {
-    use affinitree::core::afftree::AffTree;
     use affinitree::linalg::affine::PolyRepr;
+    use affinitree::pwl::afftree::AffTree;
     use affinitree::{aff, poly};
 
     use approx::assert_relative_eq;

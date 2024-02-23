@@ -26,7 +26,7 @@ use ndarray::{
     concatenate, s, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Data, Ix1, Ix2, RawDataClone,
 };
 
-use crate::linalg::vis::{write_aff, write_polytope};
+use crate::linalg::display::{write_aff, write_polytope};
 
 // wrap ndarray data types
 pub type Owned = ndarray::OwnedRepr<f64>;
@@ -81,8 +81,8 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
         );
 
         AffFuncBase {
-            mat: mat,
-            bias: bias,
+            mat,
+            bias,
             _phantom: PhantomData,
         }
     }
@@ -270,28 +270,31 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
         self.bias.view()
     }
 
-    pub fn row(&self, row: usize) -> AffFuncBase<I, Owned> {
+    pub fn row(&self, row: usize) -> AffFuncBase<I, ViewRepr> {
         assert!(
             row < self.outdim(),
             "Row outside range: got {} but only {} rows exist",
             row,
             self.outdim()
         );
-        AffFuncBase::<I, Owned>::from_mats(
-            self.mat.row(row).insert_axis(Axis(0)).to_owned(),
-            self.bias.slice(s![row]).insert_axis(Axis(0)).to_owned(),
+        AffFuncBase::<I, ViewRepr>::from_mats(
+            self.mat.row(row).insert_axis(Axis(0)),
+            self.bias.slice(s![row]).insert_axis(Axis(0)),
         )
     }
 
     /// Iterate over the rows of this AffFuncBase instance.
     /// Elements are returned as views.
-    pub fn row_iter(&self) -> impl Iterator<Item = AffFuncBase<I, Owned>> + '_ {
-        zip(self.mat.outer_iter(), self.bias.outer_iter()).map(|(row, bias)| {
-            AffFuncBase::<I, Owned>::from_mats(
-                row.to_owned().insert_axis(Axis(0)),
-                bias.to_owned().insert_axis(Axis(0)),
-            )
-        })
+    pub fn row_iter(&self) -> impl Iterator<Item = AffFuncBase<I, ViewRepr>> + '_ {
+        self.mat
+            .outer_iter()
+            .zip(self.bias.outer_iter())
+            .map(|(row, bias)| {
+                AffFuncBase::<I, ViewRepr>::from_mats(
+                    row.insert_axis(Axis(0)),
+                    bias.insert_axis(Axis(0)),
+                )
+            })
     }
 }
 
@@ -327,18 +330,26 @@ impl<D: Ownership> AffFuncBase<FunctionT, D> {
     }
 }
 
+// Distances
 impl<D: Ownership> AffFuncBase<PolytopeT, D> {
-    /// *Notice*: Distance is not normalized. Use with caution.
+    /// Calculates the distance from a point to the hyperplanes defined by the
+    /// rows of this polytope.
+    ///
+    /// # Warning
+    ///
+    /// Distance is not normalized.
     #[inline]
-    pub fn distance_raw(&self, point: &Array1<f64>) -> Array1<f64> {
+    pub fn distance_raw<D2: Ownership>(&self, point: &ArrayBase<D2, Ix1>) -> Array1<f64> {
         &self.bias - self.mat.dot(point)
     }
 
-    /// Return the (normalized) distance from point to all hyperplanes of this polytope.
+    /// Calculates the (normalized) distance from a point to the hyperplanes defined by the
+    /// rows of this polytope.
+    ///
     /// Precisely, it returns a vector where each element is the distance from the given point to the hyperplane in order.
     /// Distance is positive if the point is inside the halfspace of that inequality and negative otherwise.
     /// Returns f64::INFINITY if the corresponding halfspaces includes all points.
-    pub fn distance(&self, point: &Array1<f64>) -> Array1<f64> {
+    pub fn distance<D2: Ownership>(&self, point: &ArrayBase<D2, Ix1>) -> Array1<f64> {
         let mut raw_dist = self.distance_raw(point);
         for (row, mut dist) in zip(self.mat.outer_iter(), raw_dist.outer_iter_mut()) {
             let norm: f64 = row.iter().map(|&x| x.powi(2)).sum::<f64>().sqrt();
@@ -348,8 +359,8 @@ impl<D: Ownership> AffFuncBase<PolytopeT, D> {
     }
 
     #[inline]
-    pub fn contains(&self, point: &Array1<f64>) -> bool {
-        self.distance_raw(point).into_iter().all(|x| x >= 0f64)
+    pub fn contains<D2: Ownership>(&self, point: &ArrayBase<D2, Ix1>) -> bool {
+        self.distance_raw(point).into_iter().all(|x| x >= -1e-8)
     }
 }
 
@@ -802,15 +813,15 @@ mod tests {
     pub fn test_row() {
         let f = aff!([[1, 2, 5, 7], [-2, -9, 7, 8]] + [1, -1]);
 
-        assert_eq!(f.row(0), aff!([[1, 2, 5, 7]] + [1]));
-        assert_eq!(f.row(1), aff!([[-2, -9, 7, 8]] + [-1]));
+        assert_eq!(f.row(0).to_owned(), aff!([[1, 2, 5, 7]] + [1]));
+        assert_eq!(f.row(1).to_owned(), aff!([[-2, -9, 7, 8]] + [-1]));
     }
 
     #[test]
     pub fn test_row_iter() {
         let f = AffFunc::from_mats(Array2::eye(4), arr1(&[1., 2., 3., 4.]));
 
-        let fs = f.row_iter().collect_vec();
+        let fs = f.row_iter().map(|row| row.to_owned()).collect_vec();
 
         assert_eq!(
             fs,

@@ -1,16 +1,16 @@
-blank_lines_upper_bound = 2
-brace_style = "SameLineWhere" # default
-control_brace_style = "ClosingNextLine"
+# blank_lines_upper_bound = 2
+# brace_style = "SameLineWhere" # default
+# control_brace_style = "ClosingNextLine"
 edition = "2021"
-indent_style = "Block" # default
+# indent_style = "Block" # default
 # license_template_path
-imports_granularity = "Module"
-reorder_impl_items = true 
+# imports_granularity = "Module"
+# reorder_impl_items = true 
 reorder_imports = true # default
-group_imports = "StdExternalCrate"
+# group_imports = "StdExternalCrate"
 reorder_modules = true # default
-report_fixme = "Always"
-report_todo = "Always"
-space_after_colon = true # default
+# report_fixme = "Always"
+# report_todo = "Always"
+# space_after_colon = true # default
 tab_spaces = 4 # default
-trailing_comma = "Never"
+# trailing_comma = "Never"

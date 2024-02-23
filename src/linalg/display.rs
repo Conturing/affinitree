@@ -14,7 +14,6 @@
 
 //! Print linear functions and polytopes to the command line
 
-use itertools::enumerate;
 use ndarray::Array1;
 
 use crate::linalg::affine::{AffFunc, Polytope};

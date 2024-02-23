@@ -40,8 +40,8 @@ impl<T, const K: usize> TreeNode<T, K> {
     #[inline]
     pub fn new(value: T, parent: Option<TreeIndex>) -> TreeNode<T, K> {
         TreeNode {
-            value: value,
-            parent: parent,
+            value,
+            parent,
             children: [None; K],
             isleaf: true,
         }
@@ -76,6 +76,19 @@ pub struct NodeReference<'a, N> {
     pub idx: TreeIndex,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct NodeReferenceMut<'a, N> {
+    pub value: &'a mut N,
+    pub idx: TreeIndex,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Edge {
+    pub parent_idx: TreeIndex,
+    pub label: Label,
+    pub child_idx: TreeIndex,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EdgeReference<'a, N> {
     pub source_value: &'a N,
@@ -94,6 +107,14 @@ impl<'a, N> EdgeReference<'a, N> {
             self.target_idx,
             self.target_value,
         )
+    }
+
+    pub fn edge(&self) -> Edge {
+        Edge {
+            parent_idx: self.source_idx,
+            label: self.label,
+            child_idx: self.target_idx,
+        }
     }
 }
 
@@ -196,8 +217,14 @@ impl<N, const K: usize> Tree<N, K> {
     }
 
     /// Returns the number of terminal nodes in this tree
+    #[inline(always)]
     pub fn num_terminals(&self) -> usize {
         self.terminal_indices().count()
+    }
+
+    #[inline(always)]
+    pub fn num_nodes(&self, node: TreeIndex) -> usize {
+        DfsPreIter::with_root(self, node).count()
     }
 
     /// Returns the depth of this tree, that is, the length of its longest path.
@@ -288,7 +315,7 @@ impl<N, const K: usize> Tree<N, K> {
                     return Some(EdgeReference {
                         source_value: &parent.value,
                         source_idx: parent_idx,
-                        label: label,
+                        label,
                         target_value: &node.value,
                         target_idx: node_idx,
                     });
@@ -312,7 +339,7 @@ impl<N, const K: usize> Tree<N, K> {
                     return Some(EdgeReferenceMut {
                         source_value: &mut parent.value,
                         source_idx: parent_idx,
-                        label: label,
+                        label,
                         target_value: &mut node.value,
                         target_idx: node_idx,
                     });
@@ -333,7 +360,7 @@ impl<N, const K: usize> Tree<N, K> {
         Some(EdgeReference {
             source_value: &node.value,
             source_idx: node_idx,
-            label: label,
+            label,
             target_value: &child.value,
             target_idx: child_idx,
         })
@@ -353,7 +380,7 @@ impl<N, const K: usize> Tree<N, K> {
         Some(EdgeReferenceMut {
             source_value: &mut node.value,
             source_idx: node_idx,
-            label: label,
+            label,
             target_value: &mut child.value,
             target_idx: child_idx,
         })
@@ -374,7 +401,7 @@ impl<N, const K: usize> Tree<N, K> {
             .map(move |(label, child_idx)| EdgeReference {
                 source_value: &node.value,
                 source_idx: node_idx,
-                label: label,
+                label,
                 target_value: self.node_value(child_idx).unwrap(),
                 target_idx: child_idx,
             })
@@ -394,7 +421,7 @@ impl<N, const K: usize> Tree<N, K> {
     #[inline]
     pub fn nodes(&self) -> impl DoubleEndedIterator<Item = NodeReference<'_, N>> {
         self.arena.iter().map(|(idx, nd)| NodeReference {
-            idx: idx,
+            idx,
             value: &nd.value,
         })
     }
@@ -407,8 +434,21 @@ impl<N, const K: usize> Tree<N, K> {
             .iter()
             .filter(|(_, nd)| nd.isleaf)
             .map(|(idx, nd)| NodeReference {
-                idx: idx,
+                idx,
                 value: &nd.value,
+            })
+    }
+
+    /// Returns an iterator over the terminal nodes of this tree.
+    /// Nodes are read in index order (continuous in memory) for increased efficiency.
+    #[inline]
+    pub fn terminals_mut(&mut self) -> impl DoubleEndedIterator<Item = NodeReferenceMut<'_, N>> {
+        self.arena
+            .iter_mut()
+            .filter(|(_, nd)| nd.isleaf)
+            .map(|(idx, nd)| NodeReferenceMut {
+                idx,
+                value: &mut nd.value,
             })
     }
 
@@ -420,7 +460,7 @@ impl<N, const K: usize> Tree<N, K> {
             .iter()
             .filter(|(_, nd)| !nd.isleaf)
             .map(|(idx, nd)| NodeReference {
-                idx: idx,
+                idx,
                 value: &nd.value,
             })
     }
@@ -539,8 +579,10 @@ impl<N, const K: usize> Tree<N, K> {
         node_idx
     }
 
-    /// Tries to remove the child from ``parent`` that is reachable by ``label``.
-    /// Any descendant that is only reachable from the child is also removed.
+    /// Tries to remove the child from ``parent`` that is reachable by ``label``,
+    /// in which case the removed node is returned.
+    /// When no such child exists, ``None`` is returned.
+    /// Any descendants that are only reachable from the child are also removed.
     pub fn try_remove_child(&mut self, parent: TreeIndex, label: Label) -> Option<N> {
         let child_idx = self.child(parent, label)?.target_idx;
         self.remove_all_descendants(child_idx);
@@ -645,6 +687,15 @@ impl<N, const K: usize> Tree<N, K> {
 
         path.reverse();
         path
+    }
+
+    pub fn describe(&self) -> String {
+        format!(
+            "Tree {{ nodes={}, terminals={}, height={} }}",
+            self.len(),
+            self.num_terminals(),
+            self.depth()
+        )
     }
 }
 

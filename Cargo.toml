@@ -1,6 +1,6 @@
 [package]
 name = "affinitree"
-version = "0.20.1"
+version = "0.21.0"
 description = "A crate to distill faithful decision trees out of neural networks"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Conturing/affinitree"
@@ -20,23 +20,32 @@ console = "0.15.7"
 delegate = "0.10.0"
 derive_more = "0.99.17"
 doc-comment = "0.3.3"
+highs = {version = "1.6.1", optional = true }
 indicatif = "0.17.5"
 itertools = "0.10.5"
 log = { version = "0.4.17" }
-minilp = {version = "0.2.2" }
+minilp = {version = "0.2.2", optional = true }
 ndarray = {version = "0.15.6", features = ["approx-0_5"] }
 ndarray-npy = "0.8.1"
 rand = "0.8.5"
 regex = "1.9.0"
 slab = { version = "0.4.8" }
+serde = { version = "1.0", features = ["derive"] }
+ieee754 = "0.2.6"
+csv = "1.3.0"
 
 [dev-dependencies]
 assertables = { version = "7.0.1" }
 criterion = "0.4.0"
+env_logger = "0.11.2"
 fast_log = { version = "1.5.54" }
 ndarray-rand = "0.14.0"
 serde_json = { version = "1.0" }
 
+[features]
+default = ["minilp"]
+minilp = ["dep:minilp"]
+highs = ["dep:highs"]
 
 [[bench]]
 name = "distillation"

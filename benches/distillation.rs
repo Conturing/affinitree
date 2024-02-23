@@ -1,8 +1,10 @@
+use std::path::Path;
+
 use affinitree::aff;
-use affinitree::core::afftree::AffTree;
-use affinitree::core::builder::{afftree_from_layers, read_layers};
-use affinitree::core::schema::{self, ReLU};
-use affinitree::linalg::affine::AffFunc;
+use affinitree::distill::builder::{afftree_from_layers, read_layers};
+use affinitree::distill::schema::{self, ReLU};
+use affinitree::linalg::affine::{AffFunc, Polytope};
+use affinitree::pwl::afftree::AffTree;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ndarray::{arr1, arr2};
@@ -70,19 +72,13 @@ pub fn dd_is_feasible(c: &mut Criterion) {
     dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.]));
 
     group.bench_function("is_edge_feasible (calc)", |b| {
-        b.iter(|| {
-            dd.clone()
-                .is_edge_feasible(black_box(6), black_box(8), None)
-        })
+        b.iter(|| dd.clone().is_edge_feasible(black_box(6), black_box(8)))
     });
 
-    dd.is_edge_feasible(6, 8, None);
+    dd.is_edge_feasible(6, 8);
 
     group.bench_function("is_edge_feasible (cache)", |b| {
-        b.iter(|| {
-            dd.clone()
-                .is_edge_feasible(black_box(6), black_box(8), None)
-        })
+        b.iter(|| dd.clone().is_edge_feasible(black_box(6), black_box(8)))
     });
 }
 
@@ -124,7 +120,7 @@ pub fn ecoli_benchmark(c: &mut Criterion) {
 
     let layers = read_layers(&"res/nn/ecoli.npz").unwrap();
     group.bench_function("ecoli [7-5-5-4]", |b| {
-        b.iter(|| afftree_from_layers(7, &layers))
+        b.iter(|| afftree_from_layers(7, &layers, None))
     });
 }
 
@@ -134,7 +130,7 @@ pub fn iris_benchmark(c: &mut Criterion) {
 
     let layers = read_layers(&"res/nn/iris.npz").unwrap();
     group.bench_function("iris [4-10-8-6-4-3]", |b| {
-        b.iter(|| afftree_from_layers(4, &layers))
+        b.iter(|| afftree_from_layers(4, &layers, None))
     });
 }
 
@@ -144,7 +140,7 @@ pub fn mnist_benchmark(c: &mut Criterion) {
 
     let layers = read_layers(&"res/nn/mnist-5-5.npz").unwrap();
     group.bench_function("mnist [7-5-5-5-5-10]", |b| {
-        b.iter(|| afftree_from_layers(7, &layers))
+        b.iter(|| afftree_from_layers(7, &layers, None))
     });
 }
 
@@ -153,7 +149,7 @@ pub fn ecoli_argmax_benchmark(c: &mut Criterion) {
     group.sample_size(50);
 
     let layers = read_layers(&"res/nn/ecoli.npz").unwrap();
-    let dd = afftree_from_layers(7, &layers);
+    let dd = afftree_from_layers(7, &layers, None);
     let argmax = schema::argmax(4);
     group.bench_function("ecoli argmax", |b| {
         b.iter(|| dd.clone().compose::<true>(&argmax))
@@ -165,7 +161,7 @@ pub fn ecoli_relu_benchmark(c: &mut Criterion) {
     group.sample_size(50);
 
     let layers = read_layers(&"res/nn/ecoli.npz").unwrap();
-    let dd = afftree_from_layers(7, &layers);
+    let dd = afftree_from_layers(7, &layers, None);
     let relu = schema::ReLU(4);
     group.bench_function("ecoli relu", |b| {
         b.iter(|| dd.clone().compose::<true>(&relu))
@@ -187,6 +183,19 @@ pub fn compose_benchmark(c: &mut Criterion) {
     });
 }
 
+pub fn infeasible_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("infeasible-mnist-60");
+    group.sample_size(10);
+
+    let poly = Polytope::hypercube(60, 0.03);
+    let precondition = AffTree::<2>::from_poly(poly, AffFunc::identity(60));
+    let layers = read_layers(&Path::new("tests/mnist_60-4x10.npz")).unwrap();
+
+    group.bench_function("mnist [60-10-10-10-10]", |b| {
+        b.iter(|| afftree_from_layers(60, &layers, Some(precondition.clone())))
+    });
+}
+
 criterion_group!(
     benches,
     dd_apply_function,
@@ -198,6 +207,7 @@ criterion_group!(
     ecoli_relu_benchmark,
     compose_benchmark,
     dd_add_node_function,
-    dd_is_feasible
+    dd_is_feasible,
+    infeasible_benchmark
 );
 criterion_main!(benches);

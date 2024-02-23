@@ -12,11 +12,9 @@
 //   See the License for the specific language governing permissions and
 //   limitations under the License.
 
-//! Distillation of neural networks into decision trees
+//! Representation of piece-wise linear functions
 
 pub mod afftree;
-pub mod builder;
 pub mod dot;
 pub mod iter;
 pub mod node;
-pub mod schema;

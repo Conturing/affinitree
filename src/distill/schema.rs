@@ -14,8 +14,8 @@
 
 //! A collection of common piece-wise linear functions like activation functions
 
-use crate::core::afftree::AffTree;
 use crate::linalg::affine::AffFunc;
+use crate::pwl::afftree::AffTree;
 
 use ndarray::{Array1, Array2};
 
@@ -29,7 +29,7 @@ pub fn ReLU(dim: usize) -> AffTree<2> {
     while let Some((row, parent)) = stack.pop() {
         let predicate = dd.tree.tree_node(parent).unwrap().value.aff.clone();
 
-        dd.update_node(parent, predicate.row(row));
+        dd.update_node(parent, predicate.row(row).to_owned());
 
         let affine_true = predicate.clone();
         let mut affine_false = predicate;
@@ -302,29 +302,27 @@ pub fn inf_norm(dim: usize, minimum: Option<f64>, maximum: Option<f64>) -> AffTr
     let max_aff =
         maximum.map(|max| AffFunc::from_mats(-Array2::eye(dim), Array1::from_elem(dim, max)));
 
-    let (first, second) = if min_aff.is_some() {
-        (min_aff.unwrap(), max_aff)
-    } else {
-        (
-            max_aff.expect("One of minimum and maximum must be specified"),
-            None,
-        )
+    let (first, second) = match (min_aff, max_aff) {
+        (Some(a), Some(b)) => (a, Some(b)),
+        (Some(a), None) => (a, None),
+        (None, Some(b)) => (b, None),
+        (None, None) => panic!("One of minimum and maximum must be specified"),
     };
 
     let mut row_iter = first.row_iter();
 
-    let mut dd = AffTree::from_aff(row_iter.next().unwrap());
+    let mut dd = AffTree::from_aff(row_iter.next().unwrap().to_owned());
     let mut last_idx = dd.tree.get_root_idx();
 
     for aff in row_iter {
         dd.add_child_node(last_idx, 0, AffFunc::constant(dim, 0.));
-        last_idx = dd.add_child_node(last_idx, 1, aff);
+        last_idx = dd.add_child_node(last_idx, 1, aff.to_owned());
     }
 
     if let Some(aff) = second {
         for aff in aff.row_iter() {
             dd.add_child_node(last_idx, 0, AffFunc::constant(dim, 0.));
-            last_idx = dd.add_child_node(last_idx, 1, aff);
+            last_idx = dd.add_child_node(last_idx, 1, aff.to_owned());
         }
     }
 
@@ -338,7 +336,6 @@ pub fn inf_norm(dim: usize, minimum: Option<f64>, maximum: Option<f64>) -> AffTr
 mod tests {
 
     use super::*;
-    use crate::{core::afftree::AffTree, linalg::affine::AffFunc};
 
     use super::{argmax, ReLU};
     use approx::assert_relative_eq;

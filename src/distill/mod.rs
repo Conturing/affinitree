@@ -12,8 +12,7 @@
 //   See the License for the specific language governing permissions and
 //   limitations under the License.
 
-//! Collection of linear algebra structs and methods
+//! Distillation of neural networks into decision trees
 
-pub mod affine;
-pub mod display;
-pub mod polyhedron;
+pub mod builder;
+pub mod schema;

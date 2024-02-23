@@ -14,16 +14,15 @@
 
 use crate::linalg::{
     affine::{AffFunc, Polytope},
-    vis::{write_aff, write_polytope},
+    display::{write_aff, write_polytope},
 };
 
 use crate::tree::graph::TreeNode;
 
 use core::fmt;
-use std::cell::RefCell;
+
 use std::fmt::Display;
 
-use minilp::{Solution, Variable};
 use ndarray::Array1;
 
 use itertools::{
@@ -33,25 +32,56 @@ use itertools::{
 use std::fmt::Write;
 
 #[derive(Clone, Debug)]
+pub enum NodeState {
+    Indeterminate,
+    Infeasible,
+    Feasible,
+    FeasibleWitness(Vec<Array1<f64>>),
+}
+
+impl NodeState {
+    #[inline(always)]
+    pub fn is_feasible(&self) -> bool {
+        matches!(self, NodeState::Feasible | NodeState::FeasibleWitness(_))
+    }
+
+    #[inline(always)]
+    pub fn is_infeasible(&self) -> bool {
+        matches!(self, NodeState::Infeasible)
+    }
+
+    #[inline(always)]
+    pub fn is_indetermined(&self) -> bool {
+        matches!(self, NodeState::Indeterminate)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct AffContent {
     // When interpreted as decision A @ x + b >= 0
     // Note: inconsistency with polytope class (which uses A @ x <= b)
     pub aff: AffFunc,
-    pub(super) solutions: RefCell<Vec<Array1<f64>>>,
-    pub solver: RefCell<Option<(Solution, Vec<Variable>)>>,
+    // State of *this* node based on the path from the root to this node
+    pub state: NodeState,
 }
 
 impl AffContent {
     pub fn new(aff: AffFunc) -> AffContent {
         AffContent {
-            aff: aff,
-            solutions: RefCell::new(Vec::new()),
-            solver: RefCell::new(None),
+            aff,
+            state: NodeState::Indeterminate,
         }
     }
 
     pub fn to_poly(&self) -> Polytope {
         Polytope::from_mats(-self.aff.mat.clone(), self.aff.bias.clone())
+    }
+
+    pub fn feasible_witnesses(&self) -> Vec<Array1<f64>> {
+        match &self.state {
+            NodeState::FeasibleWitness(witnesses) => witnesses.clone(),
+            _ => Vec::new(),
+        }
     }
 }
 
