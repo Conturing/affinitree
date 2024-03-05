@@ -714,11 +714,15 @@ mod tests {
     use approx::assert_relative_eq;
 
     fn init_logger() {
-        // minilp has a bug if logging is enabled
-        // match fast_log::init(Config::new().console().chan_len(Some(100000))) {
-        //     Ok(_) => (),
-        //     Err(err) => println!("Error occurred while configuring logger: {:?}", err),
-        // }
+        use env_logger::Target;
+        use log::LevelFilter;
+
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_module("minilp", LevelFilter::Error)
+            .target(Target::Stdout)
+            .filter_level(LevelFilter::Warn)
+            .try_init();
     }
 
     /* AffFunc Tests */

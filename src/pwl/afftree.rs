@@ -140,11 +140,14 @@ pub struct AffTree<const K: usize> {
 }
 
 impl<const K: usize> AffTree<K> {
+    /// Creates an AffTree instance which represents the identity function for the given ``dim``.
     #[inline]
     pub fn new(dim: usize) -> AffTree<K> {
         Self::with_capacity(dim, 0)
     }
 
+    /// Creates an AffTree instance which represents the identity function for the given ``dim``.
+    /// Allocates space for as many nodes as specified by ``capacity`` (minimum 1).
     #[inline]
     pub fn with_capacity(dim: usize, capacity: usize) -> AffTree<K> {
         AffTree {
@@ -154,6 +157,7 @@ impl<const K: usize> AffTree<K> {
         }
     }
 
+    /// Creates an AffTree instance which represents the given affine ``func``.
     #[inline]
     pub fn from_aff(func: AffFunc) -> AffTree<K> {
         AffTree {
@@ -188,10 +192,12 @@ impl<const K: usize> AffTree<K> {
         tree
     }
 
+    /// Creates a new AffTree instance which corresponds to the affine [`AffFunc::slice`] function.
     pub fn from_slice(reference_point: &Array1<f64>) -> AffTree<K> {
         AffTree::from_aff(AffFunc::slice(reference_point))
     }
 
+    /// Creates a new AffTree instance from a raw tree whose decisions are affine predicates and terminals are affine functions.
     #[inline]
     pub fn from_tree(tree: Tree<AffContent, K>, dim: usize) -> AffTree<K> {
         AffTree {
@@ -201,6 +207,7 @@ impl<const K: usize> AffTree<K> {
         }
     }
 
+    /// Returns the input dimension of this tree.
     #[inline]
     pub fn in_dim(&self) -> usize {
         self.in_dim
@@ -218,6 +225,7 @@ impl<const K: usize> AffTree<K> {
         self.tree.is_empty()
     }
 
+    /// Returns the number of terminals in this tree.
     #[inline]
     pub fn num_terminals(&self) -> usize {
         self.tree.num_terminals()
@@ -231,21 +239,30 @@ impl<const K: usize> AffTree<K> {
         self.tree.depth()
     }
 
+    /// Reserve capacity for at least ``additional`` more nodes to be stored.
+    ///
+    /// See also [`Tree::reserve`].
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.tree.reserve(additional);
     }
 
+    /// Returns an iterator over the nodes of this tree.
+    /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
     pub fn nodes(&self) -> impl Iterator<Item = &AffContent> {
         self.tree.nodes().map(|nd| nd.value)
     }
 
+    /// Returns an iterator over the terminal nodes of this tree.
+    /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
     pub fn terminals(&self) -> impl Iterator<Item = &AffContent> {
         self.tree.terminals().map(|nd| nd.value)
     }
 
+    /// Returns an iterator over the decision nodes of this tree.
+    /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
     pub fn decisions(&self) -> impl Iterator<Item = &AffContent> {
         self.tree.decisions().map(|nd| nd.value)
@@ -255,7 +272,7 @@ impl<const K: usize> AffTree<K> {
     /// For each node in the tree four entries are returned:
     /// 1. the current depth,
     /// 2. the index of the current node,
-    /// 3. the number of siblings of the current node that have not been vistied yet,
+    /// 3. the number of siblings of the current node that have not been visited yet,
     /// 4. the halfspaces of the path leading to the current node
     ///
     /// In contrast to `polyhedra_iter` this function allows mutual access to the tree during iteration.
@@ -364,6 +381,8 @@ impl<const K: usize> AffTree<K> {
 
     /* Graph manipulation */
 
+    /// Combines this tree with the specified ``aff_func`` by composing ``aff_func`` to the left of all terminal nodes of this tree.
+    /// This is semantically equivalent to first evaluating this tree and then applying ``aff_func`` to the output.
     pub fn apply_func(&mut self, aff_func: &AffFunc) {
         for leaf_idx in self.tree.terminal_indices().collect_vec() {
             self.apply_func_at_node(leaf_idx, aff_func);
@@ -391,12 +410,25 @@ impl<const K: usize> AffTree<K> {
         self.tree.tree_node_mut(node).unwrap().isleaf = false;
     }
 
+    /// Evaluates this AffTree instance under the given ``input``.
+    ///
+    /// If a maximal iteration number is reached, this function returns ``None``.
+    ///
+    /// # Panics
+    ///
+    /// If the input does not evaluate to a terminal node of this tree.
     #[inline]
     pub fn evaluate(&self, input: &Array1<f64>) -> Option<Array1<f64>> {
         self.evaluate_to_terminal(self.tree.get_root(), input, 512)
             .map(|(func, _)| func.apply(input))
     }
 
+    /// Evaluates this AffTree instance under the given ``input``, returning the corresponding terminal node.
+    /// The evaluation is started at the given ``node`` to a maximum depth of ``max_iter``.
+    ///
+    /// # Panics
+    ///
+    /// If the input does not evaluate to a terminal node of this tree.
     pub fn evaluate_to_terminal<'a>(
         &'a self,
         node: &'a AffNode<K>,
@@ -441,6 +473,37 @@ impl<const K: usize> AffTree<K> {
         }
         assert!(idx < K);
         idx
+    }
+
+    /// Removes the specified axes from this afftree.
+    ///
+    /// Keeps the input axes where ``mask`` is True and removes all others in the whole tree.
+    ///
+    /// **Note:** Marked axes are silently dropped, which alters the represented piece-wise linear function. Best used in combination with slicing.
+    pub fn remove_axes(&mut self, mask: &Array1<bool>) {
+        assert_eq!(self.in_dim(), mask.shape()[0]);
+
+        let keep_idx = mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &x)| x)
+            .map(|(i, _)| i)
+            .collect_vec();
+
+        self.in_dim = keep_idx.len();
+
+        let mut iter = self.polyhedra();
+        while let Some((data, _)) = iter.next(&self.tree) {
+            let node = self.tree.node_value_mut(data.index).unwrap();
+
+            let restricted_mat = keep_idx
+                .iter()
+                .map(|i| node.aff.mat.index_axis(Axis(1), *i).insert_axis(Axis(1)))
+                .collect_vec();
+
+            node.aff.mat = concatenate(Axis(1), restricted_mat.as_slice()).unwrap();
+            node.state = NodeState::Indeterminate;
+        }
     }
 
     /* Composition */
@@ -1009,11 +1072,15 @@ mod tests {
     use ndarray::{arr1, arr2, array, Axis};
 
     fn init_logger() {
-        // minilp has a bug if logging is enabled
-        // match fast_log::init(Config::new().console().chan_len(Some(100000))) {
-        //     Ok(_) => (),
-        //     Err(err) => println!("Error occurred while configuring logger: {:?}", err),
-        // }
+        use env_logger::Target;
+        use log::LevelFilter;
+
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_module("minilp", LevelFilter::Error)
+            .target(Target::Stdout)
+            .filter_level(LevelFilter::Warn)
+            .try_init();
     }
 
     #[test]
@@ -1046,6 +1113,34 @@ mod tests {
         assert_eq!(dd.evaluate(&arr1(&[-1., 2.])).unwrap(), arr1(&[7., 1.]));
         assert_eq!(dd.evaluate(&arr1(&[-2., -1.])).unwrap(), arr1(&[3., 0.]));
         assert_eq!(dd.evaluate(&arr1(&[1., -2.])).unwrap(), arr1(&[0., 0.]));
+    }
+
+    #[test]
+    fn test_remove_axes() {
+        init_logger();
+
+        let mut dd = AffTree::<2>::from_aff(AffFunc::from_mats(arr2(&[[2., 1.]]), arr1(&[-1.])));
+
+        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-0.5]));
+        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [0.]));
+        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.]));
+        dd.add_child_node(3, 1, aff!([[1., 1.]] + [-6.]));
+        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.]));
+        dd.add_child_node(5, 1, aff!([[2., 0.2]] + [-3.]));
+        dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.]));
+        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.]));
+
+        assert_eq!(dd.evaluate(&arr1(&[1., 0.])).unwrap(), arr1(&[1.]));
+        assert_eq!(dd.evaluate(&arr1(&[1.5, 0.])).unwrap(), arr1(&[0.]));
+        assert_eq!(dd.evaluate(&arr1(&[4., 0.])).unwrap(), arr1(&[0.]));
+
+        let mut dd1 = dd.clone();
+        dd1.remove_axes(&arr1(&[true, false]));
+
+        assert_eq!(dd1.in_dim(), 1);
+        assert_eq!(dd1.evaluate(&arr1(&[1.])).unwrap(), arr1(&[1.]));
+        assert_eq!(dd1.evaluate(&arr1(&[1.5])).unwrap(), arr1(&[0.]));
+        assert_eq!(dd1.evaluate(&arr1(&[4.])).unwrap(), arr1(&[0.]));
     }
 
     #[test]

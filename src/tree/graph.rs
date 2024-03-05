@@ -196,7 +196,7 @@ impl<N, const K: usize> Tree<N, K> {
         }
     }
 
-    /// Constructs a new, single-node `Tree<N, K>` with the specified capacity and root node.
+    /// Constructs a new, single-node `Tree<N, K>` with the specified ``capacity`` and ``root`` node.
     #[inline(always)]
     pub fn with_root(root: N, capacity: usize) -> Tree<N, K> {
         let mut tree = Self::with_capacity(capacity.max(1));
@@ -222,6 +222,7 @@ impl<N, const K: usize> Tree<N, K> {
         self.terminal_indices().count()
     }
 
+    /// Returns the number of descendants of ``node`` (including node)
     #[inline(always)]
     pub fn num_nodes(&self, node: TreeIndex) -> usize {
         DfsPreIter::with_root(self, node).count()
@@ -246,6 +247,9 @@ impl<N, const K: usize> Tree<N, K> {
             .count()
     }
 
+    /// Reserve capacity for at least ``additional`` more nodes to be stored.
+    ///
+    /// See also [`Slab::reserve`] and [`Vec::reserve`].
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.arena.reserve(additional);

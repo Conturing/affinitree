@@ -24,7 +24,7 @@ Please feel free to contribute new functionality!
 
 ```toml
 [dependencies]
-affinitree = "0.21.0"
+affinitree = "0.21.1"
 ```
 
 Supports Rust 1.64 and later.

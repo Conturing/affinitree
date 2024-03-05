@@ -11,13 +11,11 @@ mod tests {
     use affinitree::pwl::node::NodeState;
     use approx::assert_relative_eq;
 
-    use itertools::Itertools;
     use ndarray::{Array, Array1};
     use ndarray_rand::rand_distr::Normal;
     use ndarray_rand::RandomExt;
     use rand::SeedableRng;
 
-    use std::collections::BTreeMap;
     use std::path::Path;
 
     fn init_logger() {

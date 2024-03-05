@@ -194,17 +194,16 @@ mod tests {
 
     use ndarray::{arr1, arr2, array, s, Array1};
 
-    #[cfg(feature = "minilp")]
     fn init_logger() {
-        // minilp has a bug if logging is enabled
-    }
+        use env_logger::Target;
+        use log::LevelFilter;
 
-    #[cfg(feature = "highs")]
-    fn init_logger() {
-        match fast_log::init(fast_log::Config::new().console().chan_len(Some(100000))) {
-            Ok(_) => (),
-            Err(err) => println!("Error occurred while configuring logger: {:?}", err),
-        }
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_module("minilp", LevelFilter::Error)
+            .target(Target::Stdout)
+            .filter_level(LevelFilter::Warn)
+            .try_init();
     }
 
     #[test]
