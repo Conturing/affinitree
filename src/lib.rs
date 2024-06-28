@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -107,13 +107,16 @@ addition, subtraction, scalar multiplication, and Cartesian product.
 
 #![warn(
     missing_debug_implementations,
-    //missing_docs,
+    // missing_docs,
     rust_2021_compatibility,
     // unreachable_pub
 )]
 
 // #[cfg(doctest)]
 // doc_comment::doctest!("../README.md");
+
+#[cfg(all(feature = "minilp", feature = "highs"))]
+compile_error!("features `affinitree/minilp` and `affinitree/highs` are mutually exclusive");
 
 pub mod distill;
 pub mod linalg;

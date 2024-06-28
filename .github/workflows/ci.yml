@@ -39,6 +39,12 @@ jobs:
           os: ubuntu-latest
           rust: stable
           bench: true
+          features:
+        - build: stable
+          os: ubuntu-latest
+          rust: stable
+          bench: false
+          features: --no-default-features -F highs
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -49,14 +55,14 @@ jobs:
         toolchain: ${{ matrix.rust }}
         override: true
     - name: Basic build
-      run: cargo build --verbose 
+      run: cargo build --verbose ${{ matrix.features }}
     - name: Build docs
-      run: cargo doc --verbose 
+      run: cargo doc --verbose ${{ matrix.features }}
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose ${{ matrix.features }}
     - name: Build benchmarks
       if: ${{ matrix.bench }}
-      run: cargo bench --verbose --no-run
+      run: cargo bench --verbose --no-run ${{ matrix.features }}
 
   # Tests that everything is formatted correctly.
   rustfmt:
@@ -69,9 +75,9 @@ jobs:
       uses: actions-rs/toolchain@v1
       with:
         profile: minimal
-        toolchain: stable
+        toolchain: nightly
         components: rustfmt
         override: true
     - name: Check formatting
       run: |
-        cargo fmt --all -- --check
+        cargo +nightly fmt --all -- --check

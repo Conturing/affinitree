@@ -1,3 +1,17 @@
+//   Copyright 2024 affinitree developers
+//
+//   Licensed under the Apache License, Version 2.0 (the "License");
+//   you may not use this file except in compliance with the License.
+//   You may obtain a copy of the License at
+//
+//       http://www.apache.org/licenses/LICENSE-2.0
+//
+//   Unless required by applicable law or agreed to in writing, software
+//   distributed under the License is distributed on an "AS IS" BASIS,
+//   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//   See the License for the specific language governing permissions and
+//   limitations under the License.
+
 use std::path::Path;
 
 use affinitree::aff;
@@ -5,7 +19,6 @@ use affinitree::distill::builder::{afftree_from_layers, read_layers};
 use affinitree::distill::schema::{self, ReLU};
 use affinitree::linalg::affine::{AffFunc, Polytope};
 use affinitree::pwl::afftree::AffTree;
-
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ndarray::{arr1, arr2};
 
@@ -188,7 +201,7 @@ pub fn infeasible_benchmark(c: &mut Criterion) {
     group.sample_size(10);
 
     let poly = Polytope::hypercube(60, 0.03);
-    let precondition = AffTree::<2>::from_poly(poly, AffFunc::identity(60));
+    let precondition = AffTree::<2>::from_poly(poly, AffFunc::identity(60), None);
     let layers = read_layers(&Path::new("tests/mnist_60-4x10.npz")).unwrap();
 
     group.bench_function("mnist [60-10-10-10-10]", |b| {

@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -15,15 +15,13 @@
 //! Generic tree with constant branching factor
 
 use core::fmt;
-use std::{
-    mem,
-    ops::{Index, IndexMut},
-};
+use std::mem;
+use std::ops::{Index, IndexMut};
 
 use itertools::{enumerate, Itertools};
 use slab::Slab;
 
-use super::iter::{DFSEdgeIter, DfsPreIter};
+use super::iter::{DfsEdge, DfsPre, TraversalIter, TraversalMut};
 
 pub type TreeIndex = usize;
 pub type Label = usize;
@@ -48,6 +46,7 @@ impl<T, const K: usize> TreeNode<T, K> {
     }
 
     #[inline]
+    #[rustfmt::skip]
     pub fn children_iter(&self) -> impl DoubleEndedIterator<Item = (Label, TreeIndex)> + '_ {
         self.children
             .iter()
@@ -139,6 +138,16 @@ impl<'a, N> EdgeReferenceMut<'a, N> {
     }
 }
 
+/// A tree implementation with constant branching factor ``K`` over an arena.
+///
+/// This tree implementation is designed to be memory efficient and cache friendly.
+/// It is based on an arena provided by the [``slab``] crate.
+/// In this tree, each node has a unique index during its lifetime inside the tree.
+/// Based in these indices, each node stores its parent and its ``K`` children.
+/// Nodes are stored in insertion-order, which can be optimized by the caller for cache friendly traversal patterns.
+///
+/// This tree supports standard tree operations like adding and removing nodes, and depth-first, breath-first, and in-memory traversal.
+/// This implementation handles a single connected tree, if at any point nodes become unreachable,they are automatically removed.
 #[derive(Clone)]
 pub struct Tree<N, const K: usize> {
     pub(super) arena: Slab<TreeNode<N, K>>,
@@ -222,22 +231,25 @@ impl<N, const K: usize> Tree<N, K> {
         self.terminal_indices().count()
     }
 
-    /// Returns the number of descendants of ``node`` (including node)
+    /// Returns the number of descendants of ``node`` (including ``node`` itself)
     #[inline(always)]
     pub fn num_nodes(&self, node: TreeIndex) -> usize {
-        DfsPreIter::with_root(self, node).count()
+        DfsPre::iter(self, node).count()
     }
 
     /// Returns the depth of this tree, that is, the length of its longest path.
     ///
-    /// Correspondingly, an empty tree has depth 0, and a tree with only a root node has depth 1.
+    /// For example, an empty tree has depth 0, and a tree with only a root node has depth 1.
+    #[rustfmt::skip]
     pub fn depth(&self) -> usize {
         self.dfs_iter()
-            .map(|(depth, _, _)| depth)
+            .map(|data| data.depth)
             .max()
             .unwrap_or(0)
     }
 
+    /// Returns the number of children the given ``node`` has.
+    #[rustfmt::skip]
     #[inline(always)]
     pub fn num_children(&self, node: TreeIndex) -> usize {
         self.arena[node]
@@ -247,7 +259,7 @@ impl<N, const K: usize> Tree<N, K> {
             .count()
     }
 
-    /// Reserve capacity for at least ``additional`` more nodes to be stored.
+    /// Reserves capacity for at least ``additional`` more nodes to be stored.
     ///
     /// See also [`Slab::reserve`] and [`Vec::reserve`].
     #[inline]
@@ -257,14 +269,20 @@ impl<N, const K: usize> Tree<N, K> {
 
     /// Returns the value associated with the node at the given index.
     #[inline(always)]
+    #[rustfmt::skip]
     pub fn node_value(&self, idx: TreeIndex) -> Option<&N> {
-        self.arena.get(idx).map(|nd| &nd.value)
+        self.arena
+            .get(idx)
+            .map(|nd| &nd.value)
     }
 
     /// Returns the value associated with the node at the given index.
     #[inline(always)]
+    #[rustfmt::skip]
     pub fn node_value_mut(&mut self, idx: TreeIndex) -> Option<&mut N> {
-        self.arena.get_mut(idx).map(|nd| &mut nd.value)
+        self.arena
+            .get_mut(idx)
+            .map(|nd| &mut nd.value)
     }
 
     /// Returns if the node at the given index has children or not.
@@ -423,16 +441,20 @@ impl<N, const K: usize> Tree<N, K> {
     /// Returns an iterator over the nodes of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn nodes(&self) -> impl DoubleEndedIterator<Item = NodeReference<'_, N>> {
-        self.arena.iter().map(|(idx, nd)| NodeReference {
-            idx,
-            value: &nd.value,
-        })
+        self.arena
+            .iter()
+            .map(|(idx, nd)| NodeReference {
+                idx,
+                value: &nd.value,
+            })
     }
 
     /// Returns an iterator over the terminal nodes of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn terminals(&self) -> impl DoubleEndedIterator<Item = NodeReference<'_, N>> {
         self.arena
             .iter()
@@ -446,6 +468,7 @@ impl<N, const K: usize> Tree<N, K> {
     /// Returns an iterator over the terminal nodes of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn terminals_mut(&mut self) -> impl DoubleEndedIterator<Item = NodeReferenceMut<'_, N>> {
         self.arena
             .iter_mut()
@@ -459,6 +482,7 @@ impl<N, const K: usize> Tree<N, K> {
     /// Returns an iterator over the decision nodes of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn decisions(&self) -> impl DoubleEndedIterator<Item = NodeReference<'_, N>> {
         self.arena
             .iter()
@@ -472,13 +496,17 @@ impl<N, const K: usize> Tree<N, K> {
     /// Returns an iterator over the node indices of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn node_indices(&self) -> impl DoubleEndedIterator<Item = TreeIndex> + '_ {
-        self.arena.iter().map(|(idx, _)| idx)
+        self.arena
+            .iter()
+            .map(|(idx, _)| idx)
     }
 
     /// Returns an iterator over the indices of the terminals of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn terminal_indices(&self) -> impl DoubleEndedIterator<Item = TreeIndex> + '_ {
         self.arena
             .iter()
@@ -489,6 +517,7 @@ impl<N, const K: usize> Tree<N, K> {
     /// Returns an iterator over the indices of the terminals of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn decision_indices(&self) -> impl DoubleEndedIterator<Item = TreeIndex> + '_ {
         self.arena
             .iter()
@@ -499,21 +528,23 @@ impl<N, const K: usize> Tree<N, K> {
     /// Returns an iterator over the nodes of this tree.
     /// Nodes are ordered using depth-first-search.
     #[inline]
-    pub fn dfs_iter(&self) -> DfsPreIter<'_, N, K> {
-        DfsPreIter::new(self)
+    pub fn dfs_iter(&self) -> TraversalIter<'_, DfsPre, N, K> {
+        DfsPre::iter(self, self.get_root_idx())
     }
 
     /// Returns an iterator over the edges of this tree.
     /// Edges are ordered using depth-first-search.
     #[inline]
-    pub fn dfs_edge_iter(&self) -> DFSEdgeIter<'_, N, K> {
-        DFSEdgeIter::new(self)
+    pub fn dfs_edge_iter(&self) -> TraversalIter<'_, DfsEdge, N, K> {
+        DfsEdge::iter(self, self.get_root_idx())
     }
 
     /// Returns an iterator over the edges of this tree.
     /// No guarantees are made over the ordering of the edges.
+    #[rustfmt::skip]
     pub fn edge_iter(&self) -> impl DoubleEndedIterator<Item = EdgeReference<'_, N>> {
-        self.node_iter().filter_map(|(idx, _)| self.parent(idx))
+        self.node_iter()
+            .filter_map(|(idx, _)| self.parent(idx))
     }
 
     /* Old utility methods, shouldn't be used in new code */
@@ -563,6 +594,12 @@ impl<N, const K: usize> Tree<N, K> {
         idx
     }
 
+    /// Adds a new node to the graph with given ``value``.
+    /// The node is placed as a child of ``parent`` reachable by ``label``.
+    ///
+    /// # Panics
+    ///
+    /// Panics when ``parent`` already has a child with ``label``.
     pub fn add_child_node(&mut self, parent: TreeIndex, label: Label, value: N) -> TreeIndex {
         assert!(
             self.arena.contains(parent),
@@ -583,10 +620,12 @@ impl<N, const K: usize> Tree<N, K> {
         node_idx
     }
 
-    /// Tries to remove the child from ``parent`` that is reachable by ``label``,
-    /// in which case the removed node is returned.
-    /// When no such child exists, ``None`` is returned.
-    /// Any descendants that are only reachable from the child are also removed.
+    /// Tries to remove the node uniquely specified as the child of ``parent``
+    /// reachable by ``label``.
+    /// When the node exists, it is removed and its value is returned.
+    /// Otherwise, ``None`` is returned.
+    ///
+    /// Any descendants that are only reachable from the node are also removed.
     pub fn try_remove_child(&mut self, parent: TreeIndex, label: Label) -> Option<N> {
         let child_idx = self.child(parent, label)?.target_idx;
         self.remove_all_descendants(child_idx);
@@ -610,7 +649,7 @@ impl<N, const K: usize> Tree<N, K> {
         self.try_remove_child(parent, label).expect("invalid index")
     }
 
-    /// Removes all existing descendants of ``subtree_root``.
+    /// Removes all descendants of ``subtree_root`` in this tree.
     ///
     /// # Panics
     ///
@@ -636,10 +675,14 @@ impl<N, const K: usize> Tree<N, K> {
         }
     }
 
-    /// Create a direct edge from the grandparent to the child, effectively skipping
-    /// ``parent_idx``. Afterwards ``parent_idx`` is removed from the graph.
+    /// Skips ``parent_idx`` by creating a direct edge from the grandparent of ``parent_idx`` to its child reachable by ``label``.
+    /// Afterwards ``parent_idx`` is removed from the graph.
     ///
     /// This is a useful optimization when ``parent_idx`` is redundant.
+    ///
+    /// # Panics
+    ///
+    /// Panics when ``parent_idx`` is not part of this tree or when it has no child reachable by ``label``.
     pub fn merge_child_with_parent(
         &mut self,
         parent_idx: TreeIndex,
@@ -664,15 +707,21 @@ impl<N, const K: usize> Tree<N, K> {
         self.arena.remove(parent_idx).into()
     }
 
+    /// Moves the given ``value`` into the node at ``idx``, returning its previous value.
     pub fn update_node(&mut self, idx: TreeIndex, value: N) -> Option<N> {
         let node = self.tree_node_mut(idx)?;
         Some(mem::replace(&mut node.value, value))
     }
 
+    /// Returns true if ``node_idx`` is a valid index for this tree.
+    ///
+    /// Note: An index may be reused after its node was deleted from the graph, thus ``node_idx`` might refer to a different node.
     pub fn contains(&self, node_idx: TreeIndex) -> bool {
         self.arena.contains(node_idx)
     }
 
+    /// Returns the unique sequence of nodes and labels that are encountered along the
+    /// path from the root to ``node_idx``.
     pub fn path_to_node(&self, node_idx: usize) -> Vec<(TreeIndex, Label)> {
         assert!(
             self.arena.contains(node_idx),
@@ -693,6 +742,7 @@ impl<N, const K: usize> Tree<N, K> {
         path
     }
 
+    /// Creates a short summary of the tree in form of a string.
     pub fn describe(&self) -> String {
         format!(
             "Tree {{ nodes={}, terminals={}, height={} }}",
@@ -708,14 +758,14 @@ impl<N, const K: usize> Index<usize> for Tree<N, K> {
 
     fn index(&self, index: usize) -> &Self::Output {
         self.node_value(index)
-            .expect(&format!("No node exists with index {}", index))
+            .unwrap_or_else(|| panic!("No node exists with index {}", index))
     }
 }
 
 impl<N, const K: usize> IndexMut<usize> for Tree<N, K> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         self.node_value_mut(index)
-            .expect(&format!("No node exists with index {}", index))
+            .unwrap_or_else(|| panic!("No node exists with index {}", index))
     }
 }
 
@@ -792,9 +842,7 @@ mod tests {
 
     use assertables::*;
 
-    use crate::tree::iter::DFSEdgeIter;
-
-    use super::{Label, Tree, TreeIndex};
+    use super::*;
 
     #[test]
     pub fn test_depth() {
@@ -850,43 +898,6 @@ mod tests {
 
         let indices: Vec<usize> = tree.terminal_indices().collect();
         assert_eq!(&indices, &vec![3, 4, 5, 7]);
-    }
-
-    #[test]
-    pub fn test_dfs_edge_iter() {
-        let mut tree = Tree::<(), 2>::new();
-
-        let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
-
-        let iter = DFSEdgeIter::new(&tree);
-        let nodes = Vec::from_iter(iter.map(|(_, ed)| (ed.source_idx, ed.label, ed.target_idx)));
-
-        assert_eq!(
-            nodes,
-            vec![
-                (z, 0, c0),
-                (c0, 0, l0),
-                (c0, 1, l1),
-                (z, 1, c1),
-                (c1, 0, r0),
-                (c1, 1, r1),
-                (r1, 1, rr1)
-            ]
-        );
-
-        let mut iter = DFSEdgeIter::new(&tree);
-        iter.next();
-        // skip descendants of c0, i.e., l0 and l1
-        iter.skip_subtree();
-
-        assert_eq!(iter.next().unwrap().1.target_idx, c1);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 //! A collection of high-level methods to distill AffTree instances out of neural networks
 
 use std::borrow::Borrow;
+use std::cmp::min;
 use std::fs::File;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -27,10 +28,15 @@ use regex::Regex;
 
 use crate::distill::schema::{
     argmax, class_characterization, partial_ReLU, partial_hard_sigmoid, partial_hard_tanh,
+    partial_leaky_ReLU,
 };
 use crate::linalg::affine::AffFunc;
 use crate::pwl::afftree::AffTree;
 
+/// An estimator for the number of nodes that will be created during the distillation.
+///
+/// Can be used to reserve space in advance or to display progress.
+/// Returns an estimate for the number of layers and the number of nodes.
 pub trait NodeEstimator {
     fn estimate_nodes<Item: Borrow<Layer>>(
         &self,
@@ -40,6 +46,8 @@ pub trait NodeEstimator {
     ) -> (usize, usize);
 }
 
+/// A simple [``NodeEstimator``] based on experiments.
+/// Estimation is rather conservative.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimpleNodeEstimator;
 
@@ -66,6 +74,7 @@ impl NodeEstimator for SimpleNodeEstimator {
                     }
                 }
                 Layer::ReLU(_) => n_splits += 1,
+                Layer::LeakyReLU(_, _) => n_splits += 1,
                 Layer::HardTanh(_) => n_splits += 1,
                 Layer::HardSigmoid(_) => n_splits += 1,
                 Layer::ClassChar(_) => n_splits += 1,
@@ -86,9 +95,15 @@ impl NodeEstimator for SimpleNodeEstimator {
     }
 }
 
+/// A visitor pattern for the distillation process.
+///
+/// Use cases include logging or to display progress.
 pub trait DistillVisitor {
+    /// Called once at the start of the distillation process.
     fn start_distill(&mut self, dim: usize, n_layers: usize, n_nodes: usize);
+    /// Called just before each layer is processed.
     fn start_layer(&mut self, layer: &Layer);
+    /// Called after each layer is finished.
     fn finish_layer(
         &mut self,
         layer: &Layer,
@@ -96,9 +111,14 @@ pub trait DistillVisitor {
         decision_nodes: usize,
         terminal_nodes: usize,
     );
+    /// Called once at the end of the distillation process.
     fn finish_distill(&mut self, total_decisions: usize, total_terminals: usize);
 }
 
+/// A [``DistillVisitor``] which displays a progress bar of the current state
+/// of the distillation at the console.
+/// Additionally, every layer is logged on a single line with the duration that layer took,
+/// and the number of nodes in the tree.
 #[derive(Clone, Debug)]
 pub struct DistillConsole {
     pb: ProgressBar,
@@ -168,6 +188,16 @@ impl DistillVisitor for DistillConsole {
                 ));
                 self.pb.inc(1);
             }
+            Layer::LeakyReLU(_, _) => {
+                self.pb.println(format!(
+                    "{: >12} partial leaky ReLU in {:#} ({} nodes, {} terminals)",
+                    style("Finished").green().bold(),
+                    HumanDuration(duration),
+                    decision_nodes + terminal_nodes,
+                    terminal_nodes
+                ));
+                self.pb.inc(1);
+            }
             Layer::HardTanh(_) => {
                 self.pb.println(format!(
                     "{: >12} partial hard tanh in {:#} ({} nodes, {} terminals)",
@@ -213,6 +243,12 @@ struct CsvRow {
     in_dim: usize,
 }
 
+/// A [``DistillVisitor``] which logs key metrics of the distillation process
+/// to the given csv file.
+/// Also includes a simple progress bar.
+///
+/// The following metrics are logged for each layer: current depth, number of decision predicates,
+/// number of terminal nodes, duration the distillation took (in ms), and input dimension.
 #[derive(Debug)]
 pub struct DistillCsv {
     writer: csv::Writer<File>,
@@ -265,7 +301,10 @@ impl DistillVisitor for DistillCsv {
         let duration = self.timer.elapsed();
         match layer {
             Layer::Linear(_) => {}
-            Layer::ReLU(_) | Layer::HardTanh(_) | Layer::HardSigmoid(_) => {
+            Layer::ReLU(_)
+            | Layer::LeakyReLU(_, _)
+            | Layer::HardTanh(_)
+            | Layer::HardSigmoid(_) => {
                 self.depth += 1;
                 self.writer
                     .serialize(CsvRow {
@@ -290,13 +329,17 @@ impl DistillVisitor for DistillCsv {
     }
 }
 
+/// A [``DistillVisitor``] which performs no operation.
 #[derive(Clone, Debug)]
 pub struct NoOpVis {}
 
 impl DistillVisitor for NoOpVis {
     fn start_distill(&mut self, _: usize, _: usize, _: usize) {}
+
     fn start_layer(&mut self, _: &Layer) {}
+
     fn finish_layer(&mut self, _: &Layer, _: usize, _: usize, _: usize) {}
+
     fn finish_distill(&mut self, _: usize, _: usize) {}
 }
 
@@ -308,6 +351,8 @@ pub enum Layer {
     Linear(AffFunc),
     /// The ReLU applied to the i-th component of the input
     ReLU(usize),
+    /// The Leaky ReLU applied to the i-th component of the input
+    LeakyReLU(usize, f64),
     /// The hard hyperbolic tangent applied to the i-th component of the input
     HardTanh(usize),
     /// The hard sigmoid applied to the i-th component of the input
@@ -319,6 +364,7 @@ pub enum Layer {
     ClassChar(usize),
 }
 
+/// Wrapper of [`afftree_from_layers_generic`] that prints nothing to the terminal.
 pub fn afftree_from_layers<I>(dim: usize, layers: I, precondition: Option<AffTree<2>>) -> AffTree<2>
 where
     I: IntoIterator,
@@ -333,8 +379,10 @@ where
     )
 }
 
-/// Specialization of [`afftree_from_layers_generic`] that logs the progress
+/// Wrapper of [`afftree_from_layers_generic`] that logs the progress
 /// after each layer to the console.
+///
+/// For details on the console output, see also [``DistillConsole``].
 pub fn afftree_from_layers_verbose<I>(
     dim: usize,
     layers: I,
@@ -353,8 +401,10 @@ where
     )
 }
 
-/// Specialization of [`afftree_from_layers_generic`] that logs characteristics of the tree
+/// Wrapper of [`afftree_from_layers_generic`] that logs characteristics of the tree
 /// after each layer to a csv file located at ``path``.
+///
+/// For details on the logging, see also [``DistillCsv``].
 pub fn afftree_from_layers_csv<I, P: AsRef<Path>>(
     dim: usize,
     layers: I,
@@ -398,9 +448,20 @@ where
     let container = layers.into_iter().collect_vec();
 
     let (n_layers, n_nodes) = node_estimator.estimate_nodes(dim, 0, &container);
+    let mut dim = dim;
+
+    // bound maximum number of memory reserved in advance
+    let n_nodes = min(n_nodes, 524288);
 
     let mut dd = if let Some(dd) = precondition {
-        assert_eq!(dd.in_dim(), dim);
+        assert_eq!(
+            dd.in_dim(),
+            dim,
+            "Specified dim does not match dim of precondition: {} vs {}",
+            dim,
+            dd.in_dim()
+        );
+        dim = dd.terminals().map(|x| x.aff.outdim()).next().unwrap();
         dd
     } else {
         AffTree::<2>::with_capacity(dim, n_nodes)
@@ -410,20 +471,27 @@ where
 
     visitor.start_distill(dim, n_layers, n_nodes);
 
-    let mut dim = dim;
-
     for layer in container.into_iter() {
         let layer = layer.borrow();
         let old_len = dd.len();
         visitor.start_layer(layer);
         match layer {
             Layer::Linear(aff) => {
-                assert!(aff.indim() == dim);
+                assert!(
+                    aff.indim() == dim,
+                    "Input dimension of current layer does not match output dimension of previous layer: prev={} vs current={}",
+                    dim,
+                    aff.indim()
+                );
                 dd.apply_func(aff);
                 dim = aff.outdim();
             }
             Layer::ReLU(row) => {
                 dd.compose::<false>(&partial_ReLU(dim, *row));
+                dd.infeasible_elimination();
+            }
+            Layer::LeakyReLU(row, alpha) => {
+                dd.compose::<false>(&partial_leaky_ReLU(dim, *row, *alpha));
                 dd.infeasible_elimination();
             }
             Layer::HardTanh(row) => {
@@ -453,6 +521,14 @@ where
     dd
 }
 
+/// Parses numpy's "npz" file format and returns the contained layers.
+///
+/// Affinitree supports a dialect based on numpy's "npz" format to encode the layers of
+/// a piece-wise linear neural network. The structure is significantly simpler than
+/// other formats such as "onnx".
+///
+/// The underlying format from numpy is easy to use. It is described at
+/// https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html
 pub fn read_layers<P: AsRef<Path>>(path: &P) -> Result<Vec<Layer>, ReadNpzError> {
     let file = File::open(path).map_err(ReadNpyError::from)?;
     let mut npz = NpzReader::new(file)?;
@@ -512,13 +588,52 @@ pub fn read_layers<P: AsRef<Path>>(path: &P) -> Result<Vec<Layer>, ReadNpzError>
 #[cfg(test)]
 mod tests {
 
-    use crate::distill::builder::{afftree_from_layers, read_layers};
+    use std::path::Path;
+
     use approx::assert_relative_eq;
     use ndarray::arr1;
-    use std::path::Path;
+
+    use super::*;
+    use crate::aff;
+    use crate::pwl::afftree::AffTree;
 
     #[test]
     pub fn test_read_npy() {
+        let layers = read_layers(&Path::new("res/nn/ecoli.npz")).unwrap();
+
+        assert!(matches!(layers[0], Layer::Linear(_)));
+        assert!(matches!(layers[1], Layer::ReLU(0)));
+        assert!(matches!(layers[2], Layer::ReLU(1)));
+        assert!(matches!(layers[3], Layer::ReLU(2)));
+        assert!(matches!(layers[4], Layer::ReLU(3)));
+        assert!(matches!(layers[5], Layer::ReLU(4)));
+        assert!(matches!(layers[6], Layer::Linear(_)));
+        assert!(matches!(layers[7], Layer::ReLU(0)));
+        assert!(matches!(layers[8], Layer::ReLU(1)));
+        assert!(matches!(layers[9], Layer::ReLU(2)));
+        assert!(matches!(layers[10], Layer::ReLU(3)));
+        assert!(matches!(layers[11], Layer::ReLU(4)));
+        assert!(matches!(layers[12], Layer::Linear(_)));
+    }
+
+    #[test]
+    pub fn test_precondition() {
+        let pre = AffTree::from_aff(aff!([[1, 0], [0, 1], [1, 0], [0, 1]] + [0, 0, 0, 0]));
+
+        let layers = vec![
+            Layer::Linear(aff!([[0, 1, 2, 3], [4, 5, 6, 7]] + [-1, 1])),
+            Layer::ReLU(0),
+            Layer::ReLU(1),
+            Layer::Linear(aff!([2, -2] + 0)),
+        ];
+
+        let dd = afftree_from_layers(2, &layers, Some(pre));
+
+        assert_eq!(dd.in_dim(), 2);
+    }
+
+    #[test]
+    pub fn test_afftree_from_layers() {
         let layers = read_layers(&Path::new("res/nn/ecoli.npz")).unwrap();
 
         let dd = afftree_from_layers(7, &layers, None);

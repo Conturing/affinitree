@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -15,27 +15,28 @@
 //! Structs to store linear functions and polytopes
 
 use core::fmt;
-use std::fmt::Display;
-use std::iter::zip;
+use std::fmt::Debug;
+use std::iter::{zip, Sum};
 use std::marker::PhantomData;
-use std::ops::{self, Add, Mul};
+use std::ops::{DivAssign, Mul, Neg};
 
-use itertools::enumerate;
-use ndarray::{self, arr1, Axis};
+use approx::{AbsDiffEq, RelativeEq};
+use itertools::{enumerate, Itertools};
 use ndarray::{
-    concatenate, s, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Data, Ix1, Ix2, RawDataClone,
+    self, arr1, concatenate, s, stack, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Axis,
+    Data, DataMut, DataOwned, Ix1, Ix2, LinalgScalar, OwnedRepr, RawDataClone, ViewRepr, Zip,
 };
+use num_traits::float::Float;
 
-use crate::linalg::display::{write_aff, write_polytope};
-
-// wrap ndarray data types
-pub type Owned = ndarray::OwnedRepr<f64>;
-pub type ViewRepr<'a> = ndarray::ViewRepr<&'a f64>;
-
-pub trait Ownership: Data<Elem = f64> + RawDataClone<Elem = f64> {}
-
-impl Ownership for Owned {}
-impl<'a> Ownership for ViewRepr<'a> {}
+pub struct AffFuncBase<T, S>
+where
+    S: Data,
+    S::Elem: Float,
+{
+    pub mat: ArrayBase<S, Ix2>,
+    pub bias: ArrayBase<S, Ix1>,
+    pub _phantom: PhantomData<T>,
+}
 
 #[derive(Clone, Default, Debug)]
 pub struct FunctionT;
@@ -43,24 +44,43 @@ pub struct FunctionT;
 #[derive(Clone, Default, Debug)]
 pub struct PolytopeT;
 
-#[derive(Debug, Clone)]
-pub struct AffFuncBase<I, D: Ownership> {
-    pub mat: ArrayBase<D, Ix2>,
-    pub bias: ArrayBase<D, Ix1>,
-    pub _phantom: PhantomData<I>,
+// types going forward
+type AffFuncG<A> = AffFuncBase<FunctionT, OwnedRepr<A>>;
+type AffFuncViewG<'a, A> = AffFuncBase<FunctionT, ViewRepr<&'a A>>;
+type PolytopeG<A> = AffFuncBase<PolytopeT, OwnedRepr<A>>;
+type PolytopeViewG<'a, A> = AffFuncBase<PolytopeT, ViewRepr<&'a A>>;
+
+// for compatibility
+pub type AffFunc = AffFuncG<f64>;
+pub type AffFuncView<'a> = AffFuncViewG<'a, f64>;
+pub type Polytope = PolytopeG<f64>;
+pub type PolytopeView<'a> = PolytopeViewG<'a, f64>;
+
+impl<I, D: Data<Elem = A>, A: Float + Debug> Debug for AffFuncBase<I, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_tuple("AffFuncBase")
+            .field(&self.mat)
+            .field(&self.bias)
+            .finish()
+    }
 }
 
-pub type AffFunc = AffFuncBase<FunctionT, Owned>;
-pub type AffFuncView<'a> = AffFuncBase<FunctionT, ViewRepr<'a>>;
-pub type Polytope = AffFuncBase<PolytopeT, Owned>;
-pub type PolytopeView<'a> = AffFuncBase<PolytopeT, ViewRepr<'a>>;
+impl<I, D: Data<Elem = A> + RawDataClone, A: Float + Clone> Clone for AffFuncBase<I, D> {
+    fn clone(&self) -> Self {
+        AffFuncBase {
+            mat: self.mat.clone(),
+            bias: self.bias.clone(),
+            _phantom: self._phantom,
+        }
+    }
+}
 
-// General constructor
-impl<I, D: Ownership> AffFuncBase<I, D> {
+/// # General constructor
+impl<I, D: Data<Elem = A>, A: Float> AffFuncBase<I, D> {
     /// Create a new instance of an affine combination consisting of a matrix mat: R^{m x n} and a vector bias: R^m.
     ///
-    /// When interpreted as a function it is equivalent to f(x) = mat @ x + bias.
-    /// When interpreted as a polytope it describes the set P = {x | mat @ x <= bias}
+    /// When interpreted as a function, it is equivalent to f(x) = mat @ x + bias.
+    /// When interpreted as a polytope, it encodes the set P = {x | mat @ x <= bias}
     #[inline(always)]
     pub fn from_mats(mat: ArrayBase<D, Ix2>, bias: ArrayBase<D, Ix1>) -> AffFuncBase<I, D> {
         assert_eq!(
@@ -72,11 +92,11 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
             bias.len_of(Axis(0))
         );
         debug_assert!(
-            mat.iter().all(|x| x.is_normal() || *x == 0f64),
+            mat.iter().all(|x| x.is_normal() || x.is_zero()),
             "Non-normal floats are deprecated"
         );
         debug_assert!(
-            bias.iter().all(|x| x.is_normal() || *x == 0f64),
+            bias.iter().all(|x| x.is_normal() || x.is_zero()),
             "Non-normal floats are deprecated"
         );
 
@@ -88,7 +108,7 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
     }
 
     #[cfg(test)]
-    pub fn random_affine(dim_out: usize, dim_in: usize) -> AffFuncBase<I, Owned> {
+    pub fn from_random(dim_out: usize, dim_in: usize) -> AffFuncBase<I, OwnedRepr<f64>> {
         use rand::Rng;
 
         let mut rng = rand::thread_rng();
@@ -101,153 +121,243 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
             bias[i] = rng.gen();
         }
 
-        AffFuncBase::<I, Owned> {
-            mat: mat,
-            bias: bias,
+        AffFuncBase::<I, OwnedRepr<f64>> {
+            mat,
+            bias,
             _phantom: PhantomData,
         }
     }
 }
 
-// Function specific constructors
-impl<D: Ownership> AffFuncBase<FunctionT, D> {
-    /// Create an affine function that implements the identity function f(x)=x.
+impl<I, A: Float> AffFuncBase<I, OwnedRepr<A>> {
+    pub fn from_row_iter<'a, D, Iter>(
+        indim: usize,
+        outdim: usize,
+        rows: Iter,
+    ) -> AffFuncBase<I, OwnedRepr<A>>
+    where
+        D: Data<Elem = A>,
+        Iter: IntoIterator<Item = (ArrayBase<D, Ix1>, &'a A)>,
+        A: 'a,
+    {
+        let mut mat = Array2::zeros((outdim, indim));
+        let mut bias = Array1::zeros(outdim);
+
+        let mut iter = rows.into_iter();
+
+        Zip::from(mat.axis_iter_mut(Axis(0)))
+            .and(&mut bias)
+            .for_each(|mut row, value| {
+                let (x, y) = iter.next().unwrap_or_else(|| {
+                    panic!(
+                        "Invalid number of elements in iterator: expected at least {}",
+                        outdim
+                    )
+                });
+
+                row.assign(&x);
+                *value = *y;
+            });
+
+        AffFuncBase::<I, OwnedRepr<A>>::from_mats(mat, bias)
+    }
+}
+
+/// # AffFunc specific constructors
+impl<A: Float> AffFuncG<A> {
+    /// Creates an affine function that implements the identity function f(x)=x.
     #[inline(always)]
-    pub fn identity(dim: usize) -> AffFunc {
-        AffFunc::from_mats(Array2::eye(dim), Array1::zeros(dim))
+    #[rustfmt::skip]
+    pub fn identity(dim: usize) -> AffFuncG<A> {
+        AffFuncG::<A>::from_mats(
+            Array2::eye(dim),
+            Array1::zeros(dim)
+        )
     }
 
-    /// Create an affine function that implements the zero function f(x)=0.
+    /// Creates an affine function that implements the zero function f(x)=0.
     #[inline(always)]
-    pub fn zeros(dim: usize) -> AffFunc {
-        AffFunc::from_mats(Array2::zeros((dim, dim)), Array1::zeros(dim))
+    #[rustfmt::skip]
+    pub fn zeros(dim: usize) -> AffFuncG<A> {
+        AffFuncG::<A>::from_mats(
+            Array2::zeros((dim, dim)),
+            Array1::zeros(dim)
+        )
     }
 
-    /// Create an affine function that always returns the specified value.
+    /// Creates an affine function that always returns the specified value.
     #[inline(always)]
-    pub fn constant(dim: usize, value: f64) -> AffFunc {
-        AffFunc::from_mats(Array2::zeros((1, dim)), arr1(&[value]))
+    #[rustfmt::skip]
+    pub fn constant(dim: usize, value: A) -> AffFuncG<A> {
+        AffFuncG::<A>::from_mats(
+            Array2::zeros((1, dim)),
+            arr1(&[value])
+        )
     }
 
-    /// Create an affine function that returns the element in the given ``index`` of its input.
+    /// Creates an affine function that returns the element in the given index of its input.
     #[inline(always)]
-    pub fn unit(dim: usize, index: usize) -> AffFunc {
+    #[rustfmt::skip]
+    pub fn unit(dim: usize, index: usize) -> AffFuncG<A> {
         let mut mat = Array2::zeros((1, dim));
-        mat[[0, index]] = 1.;
+        mat[[0, index]] = A::one();
 
-        AffFunc::from_mats(mat, Array1::zeros(1))
+        AffFuncG::<A>::from_mats(
+            mat,
+            Array1::zeros(1)
+        )
     }
 
-    /// Create an affine function that sets the element at the given index to zero
+    /// Creates an affine function that sets the element at the given index to zero
     /// and leaves all other elements unchanged.
     #[inline(always)]
-    pub fn zero_idx(dim: usize, index: usize) -> AffFunc {
+    #[rustfmt::skip]
+    pub fn zero_idx(dim: usize, index: usize) -> AffFuncG<A> {
         let mut mat = Array2::eye(dim);
-        mat[[index, index]] = 0.;
+        mat[[index, index]] = A::zero();
 
-        AffFunc::from_mats(mat, Array1::zeros(dim))
+        AffFuncG::<A>::from_mats(
+            mat,
+            Array1::zeros(dim)
+        )
     }
 
-    /// Create an affine function R^dim -> R that returns the sum
+    /// Creates an affine function R^dim -> R that returns the sum
     /// over all its inputs.
     #[inline(always)]
-    pub fn sum(dim: usize) -> AffFunc {
-        AffFunc::from_mats(Array2::ones((1, dim)), Array1::zeros(1))
+    #[rustfmt::skip]
+    pub fn sum(dim: usize) -> AffFuncG<A> {
+        AffFuncG::<A>::from_mats(
+            Array2::ones((1, dim)),
+            Array1::zeros(1)
+        )
     }
 
-    /// Create an affine function that subtracts the right index from the left index.
+    /// Creates an affine function that subtracts the right index from the left index.
     #[inline(always)]
-    pub fn subtraction(dim: usize, left: usize, right: usize) -> AffFunc {
+    #[rustfmt::skip]
+    pub fn subtraction(dim: usize, left: usize, right: usize) -> AffFuncG<A> {
         let mut matrix = Array2::zeros((1, dim));
-        matrix[[0, left]] = 1.;
-        matrix[[0, right]] = -1.;
+        matrix[[0, left]] = A::one();
+        matrix[[0, right]] = -A::one();
         let bias = Array1::zeros(1);
 
-        AffFunc::from_mats(matrix, bias)
+        AffFuncG::<A>::from_mats(
+            matrix,
+            bias
+        )
     }
 
-    /// Create an affine function that rotates the space as specified
+    /// Creates an affine function that rotates the space as specified
     /// by the given orthogonal matrix ``rotator``.
     #[inline(always)]
-    pub fn rotation(rotator: Array2<f64>) -> AffFunc {
+    #[rustfmt::skip]
+    pub fn rotation(rotator: Array2<A>) -> AffFuncG<A> {
         assert_eq!(rotator.shape()[0], rotator.shape()[1]);
         let dim = rotator.shape()[0];
 
-        AffFunc::from_mats(rotator, Array1::zeros(dim))
+        AffFuncG::<A>::from_mats(
+            rotator,
+            Array1::zeros(dim)
+        )
     }
 
-    /// Create an affine function that scales vectors uniformly along
+    /// Creates an affine function that scales vectors uniformly along
     /// all axis.
     #[inline(always)]
-    pub fn uniform_scaling(dim: usize, scalar: f64) -> AffFunc {
-        AffFunc::scaling(&Array1::from_elem(dim, scalar))
+    pub fn uniform_scaling(dim: usize, scalar: A) -> AffFuncG<A> {
+        AffFuncG::<A>::scaling(&Array1::from_elem(dim, scalar))
     }
 
-    /// Create an affine function that scales vectors.
+    /// Creates an affine function that scales vectors.
     #[inline(always)]
-    pub fn scaling(scalars: &Array1<f64>) -> AffFunc {
-        AffFunc::from_mats(
+    pub fn scaling(scalars: &Array1<A>) -> AffFuncG<A> {
+        AffFuncG::<A>::from_mats(
             Array2::from_diag(scalars),
             Array1::zeros(scalars.shape()[0]),
         )
     }
 
-    /// Create an affine function that slices inputs along specified axes.
+    /// Creates an affine function that slices inputs along specified axes.
     /// For each axis were ``reference_point`` is NaN, the corresponding axis will be kept.
     /// For each other axis, the axis is fixed with the value specified in ``reference_point``.
     #[inline(always)]
-    pub fn slice(reference_point: &Array1<f64>) -> AffFunc {
-        let input_mask = reference_point.map(|x| if x.is_nan() { 1. } else { 0. });
-        let fixed_values = reference_point.map(|x| if x.is_nan() { 0. } else { *x });
+    pub fn slice(reference_point: &Array1<A>) -> AffFuncG<A> {
+        let input_mask = reference_point.map(|x| if x.is_nan() { A::one() } else { A::zero() });
+        let fixed_values = reference_point.map(|x| if x.is_nan() { A::zero() } else { *x });
 
-        AffFuncBase::<FunctionT, Owned>::from_mats(Array2::from_diag(&input_mask), fixed_values)
+        AffFuncG::<A>::from_mats(Array2::from_diag(&input_mask), fixed_values)
     }
 
-    /// Create an affine function that translates vectors by the given ``offset``.
+    /// Creates an affine function that translates vectors by the given ``offset``.
     #[inline(always)]
-    pub fn translation(dim: usize, offset: Array1<f64>) -> AffFunc {
-        AffFuncBase::<FunctionT, Owned>::from_mats(Array2::zeros((offset.shape()[0], dim)), offset)
+    #[rustfmt::skip]
+    pub fn translation(dim: usize, offset: Array1<A>) -> AffFuncG<A> {
+        AffFuncG::<A>::from_mats(
+            Array2::zeros((offset.shape()[0], dim)),
+            offset
+        )
     }
 }
 
-// Polytope specific constructors
-impl<D: Ownership> AffFuncBase<PolytopeT, D> {
-    /// Constructs a polytope that contains the complete ambient `dim`-dimensional space.
+/// # Polytope specific constructors
+impl<A: Float> PolytopeG<A> {
+    /// Creates a polytope that contains the complete `dim`-dimensional ambient space.
     #[inline(always)]
-    pub fn unrestricted(dim: usize) -> Polytope {
-        Polytope::from_mats(Array2::zeros((1, dim)), Array1::ones(1))
+    pub fn unrestricted(dim: usize) -> PolytopeG<A> {
+        PolytopeG::<A>::from_mats(Array2::zeros((1, dim)), Array1::ones(1))
     }
 
     /// Creates a polytope from a set of halfspaces described by ``normal_vectors`` and ``points`` in the plane (hesse normal form).
     #[inline(always)]
-    pub fn from_normal(normal_vectors: Array2<f64>, points: Array2<f64>) -> Polytope {
+    pub fn from_normal(normal_vectors: Array2<A>, points: Array2<A>) -> PolytopeG<A> {
         let bias = (&normal_vectors).mul(&points).sum_axis(Axis(1));
-        Polytope::from_mats(-normal_vectors, -bias)
+        PolytopeG::<A>::from_mats(-normal_vectors, -bias)
     }
 
     /// Creates a `dim`-dimensional hypercube centered at the origin.
     /// In each dimension two hyperplanes are placed with distance +/- `radius` from the origin.
-    pub fn hypercube(dim: usize, radius: f64) -> Polytope {
-        let mat: Array2<f64> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
-        let bias: Array1<f64> = radius * Array1::<f64>::ones(2 * dim);
-        Polytope::from_mats(mat, bias)
+    pub fn hypercube(dim: usize, radius: A) -> PolytopeG<A> {
+        let mat: Array2<A> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
+        let bias: Array1<A> = Array1::from_elem(2 * dim, radius);
+        PolytopeG::<A>::from_mats(mat, bias)
     }
 
     /// Creates a `dim`-dimensional hyperrectangle centered at the origin.
     /// The distances from the origin to the faces of the rectangle are given by `intervals` in order of the axes.
-    pub fn hyperrectangle(dim: usize, intervals: &[(f64, f64)]) -> Polytope {
-        let mat: Array2<f64> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
-        let mut bias: Array1<f64> = Array1::<f64>::zeros(2 * dim);
+    pub fn hyperrectangle(dim: usize, intervals: &[(A, A)]) -> PolytopeG<A> {
+        let mat: Array2<A> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
+        let mut bias: Array1<A> = Array1::zeros(2 * dim);
         for idx in 0..dim {
             bias[idx] = intervals[idx].1;
             bias[idx + dim] = -intervals[idx].0;
         }
-        Polytope::from_mats(mat, bias)
+        PolytopeG::<A>::from_mats(mat, bias)
+    }
+
+    /// Creates a polytope that restricts the value of the specified `axis` to be lower and upper bounded.
+    /// A value of `neg_inf` (resp. `inf`) results in no lower (resp. upper) bound being placed.
+    #[inline(always)]
+    pub fn axis_bounds(dim: usize, axis: usize, lower_bound: A, upper_bound: A) -> PolytopeG<A> {
+        assert!(
+            axis < dim,
+            "Invalid axis received: axis {} does not exist in a {}-dimensional space",
+            axis,
+            dim
+        );
+
+        assert!(lower_bound.is_finite() && upper_bound.is_finite());
+
+        let mut mat = Array2::zeros((2, dim));
+        let bias = arr1(&[-lower_bound, upper_bound]);
+        mat[[0, axis]] = -A::one();
+        mat[[1, axis]] = A::one();
+        PolytopeG::<A>::from_mats(mat, bias)
     }
 }
 
-// General methods
-impl<I, D: Ownership> AffFuncBase<I, D> {
+/// # General methods
+impl<I, D: Data<Elem = A>, A: Float> AffFuncBase<I, D> {
     /// Returns the dimension of the input space.
     #[inline(always)]
     pub fn indim(&self) -> usize {
@@ -261,77 +371,121 @@ impl<I, D: Ownership> AffFuncBase<I, D> {
     }
 
     #[inline(always)]
-    pub fn get_matrix(&self) -> ArrayView2<f64> {
+    pub fn matrix_view(&self) -> ArrayView2<D::Elem> {
         self.mat.view()
     }
 
     #[inline(always)]
-    pub fn get_bias(&self) -> ArrayView1<f64> {
+    pub fn bias_view(&self) -> ArrayView1<D::Elem> {
         self.bias.view()
     }
 
-    pub fn row(&self, row: usize) -> AffFuncBase<I, ViewRepr> {
+    /// Returns the affine function that acts on component ``row``, which is
+    /// the ``row``-th row of this function.
+    pub fn row<'a>(&'a self, row: usize) -> AffFuncBase<I, ViewRepr<&'a A>> {
         assert!(
             row < self.outdim(),
             "Row outside range: got {} but only {} rows exist",
             row,
             self.outdim()
         );
-        AffFuncBase::<I, ViewRepr>::from_mats(
+        AffFuncBase::<I, ViewRepr<&'a A>>::from_mats(
             self.mat.row(row).insert_axis(Axis(0)),
             self.bias.slice(s![row]).insert_axis(Axis(0)),
         )
     }
 
-    /// Iterate over the rows of this AffFuncBase instance.
+    /// Returns an iterator over the rows of this AffFuncBase instance.
     /// Elements are returned as views.
-    pub fn row_iter(&self) -> impl Iterator<Item = AffFuncBase<I, ViewRepr>> + '_ {
+    pub fn row_iter<'a>(&'a self) -> impl Iterator<Item = AffFuncBase<I, ViewRepr<&'a A>>> + 'a
+    where
+        A: 'a,
+    {
         self.mat
             .outer_iter()
             .zip(self.bias.outer_iter())
             .map(|(row, bias)| {
-                AffFuncBase::<I, ViewRepr>::from_mats(
+                AffFuncBase::<I, ViewRepr<&'a A>>::from_mats(
                     row.insert_axis(Axis(0)),
                     bias.insert_axis(Axis(0)),
                 )
             })
     }
+
+    // /// Iterate over the columns of this AffFuncBase instance.
+    // /// Elements are returned as views.
+    // pub fn column_iter(&self) -> impl Iterator<Item = AffFuncBase<I, ViewRepr>> + '_ {
+    //     self.mat.axis_iter(Axis(1))
+    //         .map(|column| {
+    //             AffFuncBase::<I, ViewRepr>::from_mats(
+    //                 column.insert_axis(Axis(1)),
+    //                 ArrayView1::zeros(1),
+    //             )
+    //         })
+    // }
+
+    pub fn remove_zero_rows(&self) -> AffFuncBase<I, OwnedRepr<A>> {
+        let rows = self
+            .mat
+            .axis_iter(Axis(0))
+            .zip(self.bias.iter())
+            .filter(|(r, &v)| r.iter().any(|&x| x != A::zero()) || v != A::zero())
+            .collect_vec();
+
+        AffFuncBase::<I, OwnedRepr<A>>::from_row_iter(self.indim(), rows.len(), rows)
+    }
+
+    pub fn remove_zero_columns(&self) -> AffFuncBase<I, OwnedRepr<A>> {
+        let rows = self
+            .mat
+            .axis_iter(Axis(1))
+            .filter(|r| r.iter().any(|&x| x != A::zero()))
+            .collect_vec();
+
+        AffFuncBase::<I, OwnedRepr<A>>::from_mats(
+            stack(Axis(1), rows.as_slice()).unwrap(),
+            self.bias.to_owned(),
+        )
+    }
 }
 
-impl<D: Ownership> AffFuncBase<PolytopeT, D> {
+impl<D: Data<Elem = A>, A: Float> AffFuncBase<PolytopeT, D> {
+    /// Returns the number of inequalities (constraints) of this polytope.
     pub fn n_constraints(&self) -> usize {
         self.mat.shape()[0]
     }
 }
 
-impl<I> AffFuncBase<I, Owned> {
-    pub fn normalize(mut self) -> AffFuncBase<I, Owned> {
+impl<I, A: Float + DivAssign + Sum> AffFuncBase<I, OwnedRepr<A>> {
+    /// Normalizes every row of this polytope with respect to Euclidean norm (l2).
+    pub fn normalize(mut self) -> AffFuncBase<I, OwnedRepr<A>> {
         for (mut row, mut bias) in zip(self.mat.outer_iter_mut(), self.bias.outer_iter_mut()) {
-            let norm: f64 = row.iter().map(|&x| x.powi(2)).sum::<f64>().sqrt();
+            let norm: A = row.iter().map(|&x| x.powi(2)).sum::<A>().sqrt();
             row.map_inplace(|x| *x /= norm);
-            bias /= norm;
+            bias.map_inplace(|x| *x /= norm);
         }
         self
     }
 }
 
-impl<D: Ownership> AffFuncBase<FunctionT, D> {
-    /// Evaluate this function under the given input.
+/// # Evaluation on inputs
+impl<D: Data<Elem = A>, A: Float + LinalgScalar> AffFuncBase<FunctionT, D> {
+    /// Evaluates this function under the given input.
     /// Mathematically, this corresponds to calculating mat @ input + bias
-    pub fn apply<S: Data<Elem = f64>>(&self, input: &ArrayBase<S, Ix1>) -> Array1<f64> {
+    pub fn apply<S: Data<Elem = A>>(&self, input: &ArrayBase<S, Ix1>) -> Array1<A> {
         self.mat.dot(input) + &self.bias
     }
 
-    /// Evaluate the transposed of this function under the given input.
+    /// Evaluates the transposed of this function under the given input.
     /// For orthogonal functions this corresponds to the inverse.
     /// Mathematically, this corresponds to calculating mat.T @ (input - bias)
-    pub fn apply_transpose<S: Data<Elem = f64>>(&self, input: &ArrayBase<S, Ix1>) -> Array1<f64> {
+    pub fn apply_transpose<S: Data<Elem = A>>(&self, input: &ArrayBase<S, Ix1>) -> Array1<A> {
         self.mat.t().dot(&(input - &self.bias))
     }
 }
 
-// Distances
-impl<D: Ownership> AffFuncBase<PolytopeT, D> {
+/// # Distances
+impl<D: Data<Elem = A>, A: Float + LinalgScalar> AffFuncBase<PolytopeT, D> {
     /// Calculates the distance from a point to the hyperplanes defined by the
     /// rows of this polytope.
     ///
@@ -339,34 +493,53 @@ impl<D: Ownership> AffFuncBase<PolytopeT, D> {
     ///
     /// Distance is not normalized.
     #[inline]
-    pub fn distance_raw<D2: Ownership>(&self, point: &ArrayBase<D2, Ix1>) -> Array1<f64> {
+    pub fn distance_raw<S: Data<Elem = A>>(&self, point: &ArrayBase<S, Ix1>) -> Array1<A> {
         &self.bias - self.mat.dot(point)
     }
 
+    /// Calculates the distances from multiple points to the hyperplanes defined by the
+    /// rows of this polytope.
+    ///
+    /// # Warning
+    ///
+    /// Distance is not normalized.
+    #[inline]
+    pub fn distances_raw<S: Data<Elem = A>>(&self, point: &ArrayBase<S, Ix2>) -> Array2<A> {
+        let b_bias = self.bias.broadcast(point.dim()).unwrap();
+        &b_bias.t() - self.mat.dot(point)
+    }
+}
+
+impl<D: Data<Elem = A>, A: Float + LinalgScalar + DivAssign + Sum> AffFuncBase<PolytopeT, D> {
     /// Calculates the (normalized) distance from a point to the hyperplanes defined by the
     /// rows of this polytope.
     ///
     /// Precisely, it returns a vector where each element is the distance from the given point to the hyperplane in order.
     /// Distance is positive if the point is inside the halfspace of that inequality and negative otherwise.
     /// Returns f64::INFINITY if the corresponding halfspaces includes all points.
-    pub fn distance<D2: Ownership>(&self, point: &ArrayBase<D2, Ix1>) -> Array1<f64> {
+    pub fn distance<S: Data<Elem = A>>(&self, point: &ArrayBase<S, Ix1>) -> Array1<A> {
         let mut raw_dist = self.distance_raw(point);
         for (row, mut dist) in zip(self.mat.outer_iter(), raw_dist.outer_iter_mut()) {
-            let norm: f64 = row.iter().map(|&x| x.powi(2)).sum::<f64>().sqrt();
-            dist /= norm;
+            let norm: A = row.iter().map(|&x| x.powi(2)).sum::<A>().sqrt();
+            dist.map_inplace(|x| *x /= norm);
         }
         raw_dist
     }
+}
 
+impl<D: Data<Elem = A>, A: Float + LinalgScalar> AffFuncBase<PolytopeT, D> {
+    /// Tests whether the input ``point`` lies inside this polytope or not.
     #[inline]
-    pub fn contains<D2: Ownership>(&self, point: &ArrayBase<D2, Ix1>) -> bool {
-        self.distance_raw(point).into_iter().all(|x| x >= -1e-8)
+    pub fn contains<S: Data<Elem = A>>(&self, point: &ArrayBase<S, Ix1>) -> bool {
+        self.distance_raw(point)
+            .into_iter()
+            .all(|x| x >= A::from(-1e-8).unwrap())
     }
 }
 
-// Combine existing AffFuncs to new ones
-impl<D: Ownership> AffFuncBase<FunctionT, D> {
-    /// Compose self with other. The resulting function will have the same effect as first applying other and then self.
+/// # Combination of two AffFunc instances
+impl<D: Data<Elem = A>, A: Float + LinalgScalar> AffFuncBase<FunctionT, D> {
+    /// Composes self with other. The resulting function will have the same effect as first applying other and then self.
     ///
     /// # Example
     ///
@@ -382,7 +555,10 @@ impl<D: Ownership> AffFuncBase<FunctionT, D> {
     ///     f1.apply(&f2.apply(&arr1(&[0.3, -0.2, 0., -20., 300., -4000.])))
     /// );
     /// ```
-    pub fn compose(&self, other: &AffFuncBase<FunctionT, D>) -> AffFunc {
+    pub fn compose(
+        &self,
+        other: &AffFuncBase<FunctionT, D>,
+    ) -> AffFuncBase<FunctionT, OwnedRepr<A>> {
         assert_eq!(
             self.indim(),
             other.outdim(),
@@ -390,10 +566,14 @@ impl<D: Ownership> AffFuncBase<FunctionT, D> {
             self.indim(),
             other.outdim()
         );
-        AffFunc::from_mats(self.mat.dot(&other.mat), self.apply(&other.bias))
+        AffFuncBase::<FunctionT, OwnedRepr<A>>::from_mats(
+            self.mat.dot(&other.mat),
+            self.apply(&other.bias),
+        )
     }
 
-    pub fn stack(&self, other: &AffFuncBase<FunctionT, D>) -> AffFunc {
+    /// Stacks this function on top of ``other`` vertically.
+    pub fn stack(&self, other: &AffFuncBase<FunctionT, D>) -> AffFuncBase<FunctionT, OwnedRepr<A>> {
         assert_eq!(
             self.indim(),
             other.indim(),
@@ -401,85 +581,185 @@ impl<D: Ownership> AffFuncBase<FunctionT, D> {
             self.indim(),
             other.indim()
         );
-        AffFunc::from_mats(
+        AffFuncBase::<FunctionT, OwnedRepr<A>>::from_mats(
             concatenate![Axis(0), self.mat, other.mat],
             concatenate![Axis(0), self.bias, other.bias],
         )
     }
+}
 
-    pub fn add(self, other: &AffFuncBase<FunctionT, D>) -> AffFunc {
-        assert_eq!(
-            self.indim(),
-            other.indim(),
-            "Invalid input dimensions for adding: {} and {}",
-            self.indim(),
-            self.outdim()
-        );
-        assert_eq!(
-            self.outdim(),
-            other.outdim(),
-            "Invalid output dimensions for adding: {} and {}",
-            other.indim(),
-            other.outdim()
-        );
-        AffFunc::from_mats(self.mat.add(&other.mat), self.bias.add(&other.bias))
+impl<D: Data<Elem = A> + DataOwned + RawDataClone + DataMut, A: Float + LinalgScalar + Neg>
+    AffFuncBase<FunctionT, D>
+{
+    pub fn negate(self) -> AffFuncBase<FunctionT, D> {
+        AffFuncBase::<FunctionT, D>::from_mats(-self.mat.clone(), -self.bias)
     }
 }
 
-impl AffFunc {
-    pub fn negate(self) -> AffFunc {
-        AffFunc::from_mats(-self.mat.clone(), -self.bias)
-    }
-}
-
-// Combine existing Polytopes to new ones
-impl<D: Ownership> AffFuncBase<PolytopeT, D> {
-    pub fn translate(&self, direction: &Array1<f64>) -> Polytope {
-        Polytope::from_mats(self.mat.to_owned(), &self.bias + self.mat.dot(direction))
+/// # Combination of Polytopes
+impl<D: Data<Elem = A>, A: Float + LinalgScalar> AffFuncBase<PolytopeT, D> {
+    pub fn translate(&self, direction: &Array1<A>) -> PolytopeG<A> {
+        PolytopeG::<A>::from_mats(self.mat.to_owned(), &self.bias + self.mat.dot(direction))
     }
 
-    pub fn intersection(&self, other: &AffFuncBase<PolytopeT, D>) -> Polytope {
+    pub fn intersection(&self, other: &AffFuncBase<PolytopeT, D>) -> PolytopeG<A> {
         assert!(self.indim() == other.indim());
 
         let mat = concatenate![Axis(0), self.mat, other.mat];
         let bias = concatenate![Axis(0), self.bias, other.bias];
 
-        Polytope::from_mats(mat, bias)
+        PolytopeG::<A>::from_mats(mat, bias)
     }
 
-    /// Constructs a new polytope as the intersection of polys.
-    /// That is, the resulting polytope contains all points that are contained in each polytope of polys.
-    pub fn intersection_n(dim: usize, polys: &[AffFuncBase<PolytopeT, D>]) -> Polytope {
+    /// Constructs a new polytope representing the intersection of `polys`.
+    /// That is, the resulting polytope contains all points that are contained in each polytope of `polys`.
+    #[rustfmt::skip]
+    pub fn intersection_n(dim: usize, polys: &[AffFuncBase<PolytopeT, D>]) -> PolytopeG<A> {
+        //TODO: consider references: &[&Polytope]
+
         if polys.is_empty() {
-            return Polytope::unrestricted(dim);
+            return PolytopeG::<A>::unrestricted(dim);
         }
 
-        let mat_view: Vec<ArrayView2<f64>> = polys.iter().map(|poly| poly.mat.view()).collect();
+        let mat_view: Vec<ArrayView2<A>> = polys.iter()
+            .map(|poly| poly.mat.view())
+            .collect();
         let mat_concat = ndarray::concatenate(Axis(0), mat_view.as_slice());
         let mat = match mat_concat {
             Ok(result) => result,
-            Err(error) => panic!("Error when concatenating matrices, probably caused by a mismatch in dimensions: {:?}", error),
+            Err(error) => panic!(
+                "Error when concatenating matrices, probably caused by a mismatch in dimensions: {:?}",
+                error
+            )
         };
 
-        let bias_view: Vec<ArrayView1<f64>> = polys.iter().map(|poly| poly.bias.view()).collect();
+        let bias_view: Vec<ArrayView1<A>> = polys
+            .iter()
+            .map(|poly| poly.bias.view())
+            .collect();
         let bias_concat = ndarray::concatenate(Axis(0), bias_view.as_slice());
         let bias = match bias_concat {
             Ok(result) => result,
             Err(error) => panic!(
                 "Error when concatenating bias, probably caused by a mismatch in dimensions: {:?}",
                 error
-            ),
+            )
         };
 
-        Polytope::from_mats(mat, bias)
+        PolytopeG::<A>::from_mats(mat, bias)
     }
+
+    /// Applies the given function to the input space of this polytope.
+    pub fn apply_pre<D2: Data<Elem = A>>(&self, func: &AffFuncBase<FunctionT, D2>) -> PolytopeG<A>
+// where
+    //     D2: Ownership
+    {
+        assert_eq!(
+            self.indim(),
+            func.outdim(),
+            "Invalid shared dimensions for composition: {} and {}",
+            self.indim(),
+            func.outdim()
+        );
+
+        PolytopeG::<A>::from_mats(
+            self.mat.dot(&func.mat),
+            -self.mat.dot(&func.bias) + &self.bias,
+        )
+    }
+
+    /// Applies the function f(x) = inverse_mat^-1 @ x + bias to the output space of this polytope.
+    /// This method does not compute the inverse function. Instead, the inverse must be provided.
+    pub fn apply_post<D2, D3>(
+        &self,
+        inverse_mat: &ArrayBase<D2, Ix2>,
+        bias: &ArrayBase<D3, Ix1>,
+    ) -> PolytopeG<A>
+    where
+        D2: Data<Elem = A>,
+        D3: Data<Elem = A>,
+    {
+        assert_eq!(
+            self.indim(),
+            inverse_mat.shape()[0],
+            "Invalid shared dimensions for composition: {} and {}",
+            self.indim(),
+            inverse_mat.shape()[0]
+        );
+        assert_eq!(
+            inverse_mat.shape()[0],
+            bias.shape()[0],
+            "Invalid dimensions of bias: expected {} but got {}",
+            inverse_mat.shape()[0],
+            bias.shape()[0]
+        );
+
+        PolytopeG::<A>::from_mats(
+            self.mat.dot(inverse_mat),
+            self.mat.dot(&inverse_mat.dot(bias)) + &self.bias,
+        )
+    }
+
+    /// Rotate this polytope (i.e., the points contained in it) by the given rotation matrix.
+    /// The matrix must represent a rotation, i.e., it must be orthogonal.
+    /// The center of rotation is the origin.
+    pub fn rotate<D2>(&self, orthogonal_mat: &ArrayBase<D2, Ix2>) -> PolytopeG<A>
+    where
+        D2: Data<Elem = A>,
+    {
+        self.apply_post(&orthogonal_mat.t(), &Array1::zeros(self.indim()))
+    }
+
+    // pub fn slice<D2>(&self, reference_vec: &ArrayBase<D2, Ix1>, reduce_dim: bool, add_constraints: bool) -> AffFuncBase<PolytopeT, OwnedRepr<A>>
+    // where
+    //     D2: Data<Elem = A>
+    // {
+    //     let diag = reference_vec.map(|x| {
+    //         if *x == A::zero() {
+    //             A::from(1).unwrap()
+    //         } else {
+    //             A::zero()
+    //         }
+    //     });
+
+    //     let mut poly = self.apply_pre(&AffFuncG::<A>::from_mats(Array2::from_diag(&diag), reference_vec.to_owned()));
+
+    //     // remove any columns that are zero
+    //     if reduce_dim {
+    //         use itertools::Itertools;
+
+    //         let nonzero_columns = reference_vec.iter()
+    //             .zip(poly.mat.axis_iter(Axis(1)))
+    //             .filter(|(&x, _)| x == A::zero())
+    //             .map(|(_, column)| column.insert_axis(Axis(1)))
+    //             .collect_vec();
+
+    //         poly.mat = concatenate(Axis(1), nonzero_columns.as_slice()).unwrap();
+    //     }
+
+    //     if add_constraints {
+    //         use itertools::Itertools;
+
+    //         let mut constraints = reference_vec.iter()
+    //             .enumerate()
+    //             .filter(|(_, &x)| x != A::zero())
+    //             .map(|(idx, val)| Polytope::axis_bounds(self.indim(), idx, val - 0.0001, val + 0.0001))
+    //             .collect_vec();
+
+    //         constraints.push(poly);
+
+    //         poly = PolytopeG::<A>::intersection_n(self.indim(), constraints.as_slice());
+    //     }
+
+    //     poly
+    // }
 }
 
 // Switch between ownership
-impl<I> AffFuncBase<I, Owned> {
+impl<I, S: Data<Elem = A>, A: Float> AffFuncBase<I, S> {
     #[inline]
-    pub fn view<'a>(&'a self) -> AffFuncBase<I, ViewRepr<'a>> {
-        AffFuncBase::<I, ViewRepr<'a>> {
+    pub fn view<'a>(&'a self) -> AffFuncBase<I, ViewRepr<&'a A>> {
+        AffFuncBase::<I, ViewRepr<&'a A>> {
             mat: self.mat.view(),
             bias: self.bias.view(),
             _phantom: PhantomData,
@@ -487,10 +767,10 @@ impl<I> AffFuncBase<I, Owned> {
     }
 }
 
-impl<'a, I> AffFuncBase<I, ViewRepr<'a>> {
+impl<I, S: Data<Elem = A>, A: Float> AffFuncBase<I, S> {
     #[inline]
-    pub fn to_owned(&self) -> AffFuncBase<I, Owned> {
-        AffFuncBase::<I, Owned> {
+    pub fn to_owned(&self) -> AffFuncBase<I, OwnedRepr<A>> {
+        AffFuncBase::<I, OwnedRepr<A>> {
             mat: self.mat.to_owned(),
             bias: self.bias.to_owned(),
             _phantom: PhantomData,
@@ -499,7 +779,7 @@ impl<'a, I> AffFuncBase<I, ViewRepr<'a>> {
 }
 
 // Switch between types
-impl<D: Ownership> AffFuncBase<FunctionT, D> {
+impl<D: Data<Elem = A> + RawDataClone, A: Float> AffFuncBase<FunctionT, D> {
     #[inline]
     pub fn as_polytope(&self) -> AffFuncBase<PolytopeT, D> {
         AffFuncBase::<PolytopeT, D> {
@@ -518,7 +798,7 @@ pub enum PolyRepr {
     MatrixBiasGeqZero,
 }
 
-impl<D: Ownership> AffFuncBase<PolytopeT, D> {
+impl<D: Data<Elem = A> + RawDataClone, A: Float> AffFuncBase<PolytopeT, D> {
     #[inline]
     pub fn as_function(&self) -> AffFuncBase<FunctionT, D> {
         AffFuncBase::<FunctionT, D> {
@@ -536,28 +816,30 @@ impl<D: Ownership> AffFuncBase<PolytopeT, D> {
             _phantom: PhantomData,
         }
     }
+}
 
+impl<A: Float> AffFuncBase<PolytopeT, OwnedRepr<A>> {
     #[inline]
-    pub fn convert_to(&self, repr: PolyRepr) -> AffFuncBase<FunctionT, Owned> {
+    pub fn convert_to(self, repr: PolyRepr) -> AffFuncBase<FunctionT, OwnedRepr<A>> {
         match repr {
-            PolyRepr::MatrixLeqBias => AffFuncBase::<FunctionT, Owned> {
-                mat: self.mat.to_owned(),
-                bias: self.bias.to_owned(),
+            PolyRepr::MatrixLeqBias => AffFuncBase::<FunctionT, OwnedRepr<A>> {
+                mat: self.mat,
+                bias: self.bias,
                 _phantom: PhantomData,
             },
-            PolyRepr::MatrixBiasLeqZero => AffFuncBase::<FunctionT, Owned> {
-                mat: self.mat.to_owned(),
-                bias: -self.bias.to_owned(),
+            PolyRepr::MatrixBiasLeqZero => AffFuncBase::<FunctionT, OwnedRepr<A>> {
+                mat: self.mat,
+                bias: -self.bias,
                 _phantom: PhantomData,
             },
-            PolyRepr::MatrixGeqBias => AffFuncBase::<FunctionT, Owned> {
-                mat: -self.mat.to_owned(),
-                bias: -self.bias.to_owned(),
+            PolyRepr::MatrixGeqBias => AffFuncBase::<FunctionT, OwnedRepr<A>> {
+                mat: -self.mat,
+                bias: -self.bias,
                 _phantom: PhantomData,
             },
-            PolyRepr::MatrixBiasGeqZero => AffFuncBase::<FunctionT, Owned> {
-                mat: -self.mat.to_owned(),
-                bias: self.bias.to_owned(),
+            PolyRepr::MatrixBiasGeqZero => AffFuncBase::<FunctionT, OwnedRepr<A>> {
+                mat: -self.mat,
+                bias: self.bias,
                 _phantom: PhantomData,
             },
         }
@@ -571,7 +853,7 @@ impl AffFunc {
     }
 }
 
-impl<D: Ownership> AffFuncBase<PolytopeT, D> {
+impl<D: Data<Elem = A> + RawDataClone, A: Float> AffFuncBase<PolytopeT, D> {
     /// Returns the linear program that encodes the chebyshev center of this polytope.
     /// That is, the resulting polytope contains all points that are
     ///
@@ -580,32 +862,29 @@ impl<D: Ownership> AffFuncBase<PolytopeT, D> {
     ///
     /// The returned array encodes the coefficients of the cost function.
     /// Minimizing this function over the region of the returned polytope gives the center point and radius of the largest enclosed sphere inside this polytope.
-    pub fn chebyshev_center(&self) -> (Polytope, Array1<f64>) {
+    pub fn chebyshev_center(&self) -> (PolytopeG<A>, Array1<A>) {
         // distance to each hyperplane
-        let mut norm = Array2::<f64>::zeros((self.mat.len_of(Axis(0)), 1));
+        let mut norm = Array2::<A>::zeros((self.mat.len_of(Axis(0)), 1));
 
         for (idx, row) in enumerate(self.mat.outer_iter()) {
-            norm[[idx, 0]] = row.map(|x: &f64| x.powi(2)).sum().sqrt();
+            norm[[idx, 0]] = row.map(|x: &A| x.powi(2)).sum().sqrt();
         }
         let amod = concatenate![Axis(1), self.mat, norm];
 
         // radius must be positive
-        let mut rad = Array2::<f64>::zeros((1, amod.len_of(Axis(1))));
-        rad[[0, amod.len_of(Axis(1)) - 1]] = -1.;
+        let mut rad = Array2::<A>::zeros((1, amod.len_of(Axis(1))));
+        rad[[0, amod.len_of(Axis(1)) - 1]] = -A::one();
         let amod = concatenate![Axis(0), amod, rad];
-        let bmod = concatenate![Axis(0), self.bias.clone(), Array1::<f64>::zeros(1)];
+        let bmod = concatenate![Axis(0), self.bias.clone(), Array1::<A>::zeros(1)];
 
         (
-            Polytope::from_mats(amod, bmod),
+            PolytopeG::<A>::from_mats(amod, bmod),
             Array1::from_iter(rad.iter().cloned()),
         )
     }
 }
 
-impl<I, D> core::cmp::PartialEq for AffFuncBase<I, D>
-where
-    D: Ownership,
-{
+impl<I, D: Data<Elem = A>, A: Float> core::cmp::PartialEq for AffFuncBase<I, D> {
     fn eq(&self, other: &Self) -> bool {
         let (
             AffFuncBase {
@@ -623,43 +902,60 @@ where
     }
 }
 
-impl Display for AffFunc {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write_aff(f, self, true)
+impl<I, S, A> AbsDiffEq for AffFuncBase<I, S>
+where
+    S: Data<Elem = A>,
+    A: Float + AbsDiffEq,
+    A::Epsilon: Clone,
+{
+    type Epsilon = A::Epsilon;
+
+    fn default_epsilon() -> A::Epsilon {
+        A::default_epsilon()
+    }
+
+    fn abs_diff_eq(&self, other: &Self, epsilon: A::Epsilon) -> bool {
+        <ArrayBase<S, Ix2> as AbsDiffEq<_>>::abs_diff_eq(&self.mat, &other.mat, epsilon.clone())
+            && <ArrayBase<S, Ix1> as AbsDiffEq<_>>::abs_diff_eq(&self.bias, &other.bias, epsilon)
     }
 }
 
-impl Display for Polytope {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write_polytope(f, self, true)
+impl<I, S, A> RelativeEq for AffFuncBase<I, S>
+where
+    S: Data<Elem = A>,
+    A: Float + RelativeEq,
+    A::Epsilon: Clone,
+{
+    fn default_max_relative() -> Self::Epsilon {
+        A::default_max_relative()
+    }
+
+    fn relative_eq(&self, other: &Self, epsilon: A::Epsilon, max_relative: A::Epsilon) -> bool {
+        <ArrayBase<S, Ix2> as RelativeEq<_>>::relative_eq(
+            &self.mat,
+            &other.mat,
+            epsilon.clone(),
+            max_relative.clone(),
+        ) && <ArrayBase<S, Ix1> as RelativeEq<_>>::relative_eq(
+            &self.bias,
+            &other.bias,
+            epsilon,
+            max_relative,
+        )
     }
 }
 
-impl ops::Add<&AffFunc> for AffFunc {
-    type Output = AffFunc;
-
-    fn add(self, other: &AffFunc) -> AffFunc {
-        self.add(other)
-    }
-}
-
-impl ops::Sub<AffFunc> for AffFunc {
-    type Output = AffFunc;
-
-    fn sub(self, other: AffFunc) -> AffFunc {
-        self.add(&other.negate())
-    }
-}
-
-impl ops::Neg for AffFunc {
-    type Output = AffFunc;
-
-    fn neg(self) -> AffFunc {
-        self.negate()
-    }
-}
-
-// see also ndarray's array! macro
+/// Creates a new ``AffFunc`` from the given matrix and bias.
+///
+/// See also ndarray's ``array`` macro
+///
+/// # Examples
+///
+/// ```rust
+/// use affinitree::aff;
+///
+/// let func = aff!([[1, 2, 5, 7], [-2, -9, 7, 8]] + [1, -1]);
+/// ```
 #[macro_export]
 macro_rules! aff {
     ([ $([$($x:expr),* $(,)*]),+ $(,)* ] + [ $($y:expr),* $(,)* ]) => {{
@@ -676,6 +972,15 @@ macro_rules! aff {
     }};
 }
 
+/// Creates a new ``Polytope`` from the given matrix and bias.
+///
+/// # Examples
+///
+/// ```rust
+/// use affinitree::poly;
+///
+/// let poly = poly!([[1, 0], [0, 1]] < [2, 3]);
+/// ```
 #[macro_export]
 macro_rules! poly {
     ([ $([$($x:expr),* $(,)*]),+ $(,)* ] < [ $($y:expr),* $(,)* ]) => {{
@@ -706,12 +1011,11 @@ macro_rules! poly {
 
 #[cfg(test)]
 mod tests {
-    use crate::linalg::affine::{AffFunc, Polytope};
-
-    use itertools::Itertools;
-    use ndarray::{arr1, arr2, array, s, Array2};
-
     use approx::assert_relative_eq;
+    use itertools::Itertools;
+    use ndarray::{arr1, arr2, array, s, Array2, Axis};
+
+    use super::*;
 
     fn init_logger() {
         use env_logger::Target;
@@ -743,6 +1047,17 @@ mod tests {
         let mat = Array2::from_diag(&arr1(&[1., 7., f64::NAN, 1e-4, 0.3]));
         let bias = arr1(&[0.1, -7., 1e-2, 1e+4, 0.3]);
         AffFunc::from_mats(mat, bias);
+    }
+
+    #[test]
+    pub fn test_from_row_iter() {
+        let mat = array![[1., 2.], [-3., 0.5], [0.3, 1e+4]];
+        let bias = arr1(&[0.1, -7., 1e-2]);
+
+        let f = AffFunc::from_row_iter(2, 3, mat.axis_iter(Axis(0)).zip(bias.iter()));
+
+        assert_eq!(mat, f.mat);
+        assert_eq!(bias, f.bias);
     }
 
     #[test]
@@ -806,6 +1121,15 @@ mod tests {
     }
 
     #[test]
+    fn test_slice_afffunc() {
+        let res = AffFunc::slice(&arr1(&[2., f64::NAN, -4.]));
+
+        assert_eq!(res.apply(&arr1(&[5., -3., 7.])), arr1(&[2., -3., -4.]));
+
+        assert_eq!(res.apply(&arr1(&[0., 9., -0.3])), arr1(&[2., 9., -4.]));
+    }
+
+    #[test]
     pub fn test_dim() {
         let f = aff!([[1, 2, 5, 7], [-2, -9, 7, 8]] + [1, -1]);
 
@@ -825,7 +1149,7 @@ mod tests {
     pub fn test_row_iter() {
         let f = AffFunc::from_mats(Array2::eye(4), arr1(&[1., 2., 3., 4.]));
 
-        let fs = f.row_iter().map(|row| row.to_owned()).collect_vec();
+        let fs = f.row_iter().map(|x| x.to_owned()).collect_vec();
 
         assert_eq!(
             fs,
@@ -836,6 +1160,29 @@ mod tests {
                 aff!([0., 0., 0., 1.] + 4.)
             ]
         )
+    }
+
+    // #[test]
+    // pub fn test_column_iter() {
+    //     let f = AffFunc::from_mats(Array2::eye(4), arr1(&[1., 2., 3., 4.]));
+
+    //     let fs = f.column_iter().map(|x| x.to_owned()).collect_vec();
+
+    //     assert_eq!(fs, vec![
+    //         aff!([1., 0., 0., 0.] + 0.),
+    //         aff!([0., 1., 0., 0.] + 0.),
+    //         aff!([0., 0., 1., 0.] + 0.),
+    //         aff!([0., 0., 0., 1.] + 0.)
+    //     ])
+    // }
+
+    #[test]
+    pub fn test_remove_rows() {
+        let f = aff!([[1, 0, 2], [0, 0, 0], [0, 0, 0]] + [0, 0, 1]);
+
+        let g = f.remove_zero_rows();
+
+        assert_eq!(g, aff!([[1, 0, 2], [0, 0, 0]] + [0, 1]));
     }
 
     #[test]
@@ -874,41 +1221,6 @@ mod tests {
     }
 
     #[test]
-    pub fn test_add() {
-        let f1 = AffFunc::unit(6, 4);
-        let f2 = AffFunc::constant(6, 10.);
-        let f = f1 + &f2;
-
-        assert_eq!(
-            f.apply(&arr1(&[0.3, -0.2, 0., -20., 300., -4000.])),
-            arr1(&[310.])
-        );
-    }
-
-    #[test]
-    pub fn test_sub() {
-        let f1 = AffFunc::unit(6, 3);
-        let f2 = AffFunc::unit(6, 0);
-        let f = f1 - f2;
-
-        assert_eq!(
-            f.apply(&arr1(&[0.3, -0.2, 0., -20., 300., -4000.])),
-            arr1(&[-20.3])
-        );
-    }
-
-    #[test]
-    pub fn test_neg() {
-        let f1 = AffFunc::unit(6, 4);
-        let f = -f1;
-
-        assert_eq!(
-            f.apply(&arr1(&[0.3, -0.2, 0., -20., 300., -4000.])),
-            arr1(&[-300.])
-        );
-    }
-
-    #[test]
     pub fn test_aff_macro() {
         assert_eq!(
             aff!([1, 0, 1] + 2),
@@ -926,7 +1238,7 @@ mod tests {
 
     #[test]
     pub fn test_affine() {
-        let a = AffFunc::random_affine(4, 3);
+        let a = AffFunc::from_random(4, 3);
         let b = AffFunc::identity(4);
         let c = b.compose(&a);
         assert!(c.indim() == 3);
@@ -940,6 +1252,7 @@ mod tests {
         let poly = Polytope::unrestricted(4);
 
         assert_eq!(poly.indim(), 4);
+        //TODO
     }
 
     #[test]
@@ -1068,6 +1381,69 @@ mod tests {
         assert!(!poly.contains(&arr1(&[0.4, 0.4])));
         assert!(!poly.contains(&arr1(&[-0.4, -0.4])));
     }
+
+    #[test]
+    fn test_rotate() {
+        // define triangle with vertices (1, 1), (1, 2.87), (4.71, 1)
+        let poly = poly!([[0, -1], [-1, 0], [0.45, 0.89]] < [-1, -1, 3]);
+
+        // rotate by 45° counterclockwise
+        let rot = array![[0.71, -0.71], [0.71, 0.71]];
+
+        assert!(poly.contains(&array![1.1, 1.1]));
+        assert!(poly.contains(&array![1.1, 2.6]));
+        assert!(poly.contains(&array![2.0, 2.0]));
+        assert!(poly.contains(&array![4.4, 1.1]));
+        assert!(poly.contains(&array![3.0, 1.4]));
+
+        let poly2 = poly.rotate(&rot);
+
+        // rotated points
+        assert!(poly2.contains(&array![0.0, 1.562]));
+        assert!(poly2.contains(&array![-1.065, 2.627]));
+        assert!(poly2.contains(&array![0.0, 2.84]));
+        assert!(poly2.contains(&array![2.343, 3.905]));
+        assert!(poly2.contains(&array![1.136, 3.124]));
+
+        // points just outside the triangle
+        assert!(!poly2.contains(&array![-1.7, 2.8]));
+        assert!(!poly2.contains(&array![3.1, 4.3]));
+        assert!(!poly2.contains(&array![0.2, 3.6]));
+        assert!(!poly2.contains(&array![-1., 2.]));
+        assert!(!poly2.contains(&array![1.1, 2.1]));
+    }
+
+    // #[test]
+    // fn test_slice() {
+    //     // define triangle with vertices (1, 1), (1, 2.87), (4.71, 1)
+    //     let poly = poly!([[0, -1], [-1, 0], [0.45, 0.89]] < [-1, -1, 3]);
+
+    //     let poly2 = poly.slice(&array![0., 1.5], false, false);
+
+    //     // points just inside
+    //     assert!(poly2.contains(&array![1.1, 0.]));
+    //     assert!(poly2.contains(&array![3.6, 0.]));
+
+    //     // points just outside
+    //     assert!(!poly2.contains(&array![0.9, 0.]));
+    //     assert!(!poly2.contains(&array![3.8, 0.]));
+    // }
+
+    // #[test]
+    // fn test_slice_reduce() {
+    //     // define triangle with vertices (1, 1), (1, 2.87), (4.71, 1)
+    //     let poly = poly!([[0, -1], [-1, 0], [0.45, 0.89]] < [-1, -1, 3]);
+
+    //     let poly2 = poly.slice(&array![0., 1.5], true, false);
+
+    //     // points just inside
+    //     assert!(poly2.contains(&array![1.1]));
+    //     assert!(poly2.contains(&array![3.6]));
+
+    //     // points just outside
+    //     assert!(!poly2.contains(&array![0.9]));
+    //     assert!(!poly2.contains(&array![3.8]));
+    // }
 
     #[test]
     pub fn test_chebyshev_box() {

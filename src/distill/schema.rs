@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -14,12 +14,14 @@
 
 //! A collection of common piece-wise linear functions like activation functions
 
+use ndarray::{Array1, Array2};
+
 use crate::linalg::affine::AffFunc;
 use crate::pwl::afftree::AffTree;
 
-use ndarray::{Array1, Array2};
-
-/// Create an AffTree instance that corresponds to the ReLU function element-wise.
+/// Creates an AffTree instance that corresponds to the ReLU function element-wise.
+///
+/// Formally, it is defined as (ReLU(x))_i = max {0, x_i}
 #[allow(non_snake_case)]
 pub fn ReLU(dim: usize) -> AffTree<2> {
     let mut dd = AffTree::new(dim);
@@ -47,8 +49,10 @@ pub fn ReLU(dim: usize) -> AffTree<2> {
     dd
 }
 
-/// Create an AffTree instance that corresponds to the ReLU function applied
+/// Creates an AffTree instance that corresponds to the ReLU function applied
 /// to the specified ``row``.
+///
+/// Formally, it is defined as (partial_ReLU(x))_row = max {0, x_row}
 #[allow(non_snake_case)]
 pub fn partial_ReLU(dim: usize, row: usize) -> AffTree<2> {
     assert!(
@@ -69,8 +73,10 @@ pub fn partial_ReLU(dim: usize, row: usize) -> AffTree<2> {
     dd
 }
 
-/// Create an AffTree instance that corresponds to the leaky ReLU function applied
+/// Creates an AffTree instance that corresponds to the leaky ReLU function applied
 /// to the specified ``row``.
+///
+/// Formally, it is defined as (partial_leaky_ReLU(x))_row = x_row if x_row > 0 else alpha * x_row
 #[allow(non_snake_case)]
 pub fn partial_leaky_ReLU(dim: usize, row: usize, alpha: f64) -> AffTree<2> {
     assert!(
@@ -92,7 +98,7 @@ pub fn partial_leaky_ReLU(dim: usize, row: usize, alpha: f64) -> AffTree<2> {
     dd
 }
 
-/// Create an AffTree instance that corresponds to the hard hyperbolic tangent function applied
+/// Creates an AffTree instance that corresponds to the hard hyperbolic tangent function applied
 /// to the specified ``row``.
 #[allow(non_snake_case)]
 pub fn partial_hard_tanh(dim: usize, row: usize, min_val: f64, max_val: f64) -> AffTree<2> {
@@ -133,7 +139,7 @@ pub fn partial_hard_tanh(dim: usize, row: usize, min_val: f64, max_val: f64) -> 
     dd
 }
 
-/// Create an AffTree instance that corresponds to the hard shrink function applied
+/// Creates an AffTree instance that corresponds to the hard shrink function applied
 /// to the specified ``row``.
 #[allow(non_snake_case)]
 pub fn partial_hard_shrink(dim: usize, row: usize, lambda: f64) -> AffTree<2> {
@@ -166,7 +172,7 @@ pub fn partial_hard_shrink(dim: usize, row: usize, lambda: f64) -> AffTree<2> {
     dd
 }
 
-/// Create an AffTree instance that corresponds to the hard sigmoid function applied
+/// Creates an AffTree instance that corresponds to the hard sigmoid function applied
 /// to the specified ``row``.
 #[allow(non_snake_case)]
 pub fn partial_hard_sigmoid(dim: usize, row: usize) -> AffTree<2> {
@@ -204,7 +210,7 @@ pub fn partial_hard_sigmoid(dim: usize, row: usize) -> AffTree<2> {
     dd
 }
 
-/// Create an AffTree instance that corresponds to the threshold function applied
+/// Creates an AffTree instance that corresponds to the threshold function applied
 /// to the specified ``row``.
 #[allow(non_snake_case)]
 pub fn partial_threshold(dim: usize, row: usize, threshold: f64, value: f64) -> AffTree<2> {
@@ -260,8 +266,8 @@ pub fn argmax(dim: usize) -> AffTree<2> {
     dd
 }
 
-/// Create an AffTree instance that corresponds to the class characterization.
-/// This is an indicator function that shows if the argmax of its input vector
+/// Creates an AffTree instance that corresponds to the class characterization.
+/// That is, an indicator function that shows if the argmax of its input vector
 /// coincides with the specified ``clazz``, i.e., if the value of the input at
 /// position ``clazz`` is maximal.
 pub fn class_characterization(dim: usize, clazz: usize) -> AffTree<2> {
@@ -296,6 +302,10 @@ pub fn class_characterization(dim: usize, clazz: usize) -> AffTree<2> {
     dd
 }
 
+/// Creates an AffTree instance that tests whether an input has an infinity norm
+/// bounded by ``minimum`` and ``maximum``, if specified.
+///
+/// If true, a constant 1 is returned, otherwise a constant 0.
 pub fn inf_norm(dim: usize, minimum: Option<f64>, maximum: Option<f64>) -> AffTree<2> {
     let min_aff =
         minimum.map(|min| AffFunc::from_mats(Array2::eye(dim), -Array1::from_elem(dim, min)));
@@ -335,11 +345,10 @@ pub fn inf_norm(dim: usize, minimum: Option<f64>, maximum: Option<f64>) -> AffTr
 #[cfg(test)]
 mod tests {
 
-    use super::*;
-
-    use super::{argmax, ReLU};
     use approx::assert_relative_eq;
     use ndarray::arr1;
+
+    use super::*;
 
     #[test]
     pub fn test_relu_4() {

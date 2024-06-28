@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -15,5 +15,6 @@
 //! Collection of linear algebra structs and methods
 
 pub mod affine;
-pub mod display;
+pub mod impl_affineformat;
+pub mod impl_ops;
 pub mod polyhedron;

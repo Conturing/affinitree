@@ -24,7 +24,7 @@ Please feel free to contribute new functionality!
 
 ```toml
 [dependencies]
-affinitree = "0.21.1"
+affinitree = "0.22.0"
 ```
 
 Supports Rust 1.64 and later.
@@ -64,7 +64,7 @@ let dd1 = AffTree::<2>::new(dim);
 let dd2 = AffTree::<2>::with_capacity(dim, 32);
 ```
 
-The resulting decision tree encodes simply the identity function $\R^{dim} \to \R^{dim}$.
+The resulting decision tree encodes simply the identity function $\mathbb{R}^{dim} \to \mathbb{R}^{dim}$.
 Next, we want to update the decision tree.
 For that, let us assume the following toy example:
 We want to to introduce the hyperplane $x_1 - x_3 \leq 1$ as a discrimination rule to split the input space into two regions.
@@ -85,7 +85,7 @@ assert_eq!(func1, func2);
 Now applying this function to our tree is straightforward.
 
 ```rust
-dd1.apply_func(&func);
+dd1.apply_func(&func2);
 ```
 
 However, most use cases of neural networks include deeper architectures with non-linear activation functions.
@@ -119,7 +119,34 @@ let layers = read_layers(&"res/nn/mnist-5-5.npz").unwrap();
 let dd = afftree_from_layers(7, &layers, None);
 ```
 
-For additional examples have a look at the [test cases](tests).
+For additional examples take a look at the [test cases](tests).
+
+## Development
+
+This project is developed using the Rust ecosystem to ensure efficiency, code quality, and consistency. 
+To run all included unit tests, execute the following command in your terminal:
+```sh
+cargo test
+```
+For consistent code formatting, we use rustfmt. 
+Our formatting rules are defined in the [rustfmt.toml](rustfmt.toml) file.
+Automatic formatting can be applied using the following command:
+```sh
+cargo +nightly fmt
+```
+Both commands are automatically invoked in our GitHub pipeline on new commits.
+
+For micro-benchmarking, we rely on ``criterion``.
+To measure the current working directory and save the results for later comparison one can use:
+```sh
+cargo bench --bench distillation -- --save-baseline "$(date +%Y-%m-%d)_$(git rev-parse --short HEAD)"
+```
+And for code analysis and linting, we use ``clippy``.
+It can automatically apply fixes for detected issues:
+```sh
+cargo clippy --fix 
+```
+
 
 ## License
 

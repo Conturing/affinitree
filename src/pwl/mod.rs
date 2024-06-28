@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -12,9 +12,13 @@
 //   See the License for the specific language governing permissions and
 //   limitations under the License.
 
-//! Representation of piece-wise linear functions
+//! Tree-based data structure for piece-wise linear functions
 
 pub mod afftree;
 pub mod dot;
+pub mod impl_composition;
+pub mod impl_infeasible_elim;
+pub mod impl_ops;
+pub mod impl_reduction;
 pub mod iter;
 pub mod node;

@@ -1,3 +1,17 @@
+//   Copyright 2024 affinitree developers
+//
+//   Licensed under the Apache License, Version 2.0 (the "License");
+//   you may not use this file except in compliance with the License.
+//   You may obtain a copy of the License at
+//
+//       http://www.apache.org/licenses/LICENSE-2.0
+//
+//   Unless required by applicable law or agreed to in writing, software
+//   distributed under the License is distributed on an "AS IS" BASIS,
+//   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//   See the License for the specific language governing permissions and
+//   limitations under the License.
+
 /// Equivalence test based on mnist.
 ///
 /// In this test case a DNN trained on the mnist dataset is loaded
@@ -6,17 +20,16 @@
 /// which the terminals are reached are logged.
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use affinitree::distill::builder::{afftree_from_layers_verbose, read_layers, Layer};
     use affinitree::linalg::affine::Polytope;
     use affinitree::pwl::node::NodeState;
     use approx::assert_relative_eq;
-
     use ndarray::{Array, Array1};
     use ndarray_rand::rand_distr::Normal;
     use ndarray_rand::RandomExt;
     use rand::SeedableRng;
-
-    use std::path::Path;
 
     fn init_logger() {
         use env_logger::Target;
@@ -63,10 +76,8 @@ mod tests {
             let x = Array::random_using(60, normal, &mut rng);
 
             let gt = eval_layers(&layers[0..7], &x);
-            let out = dd0
-                .evaluate_to_terminal(dd0.tree.get_root(), &x, 512)
-                .unwrap();
-            let val = out.0.apply(&x);
+            let out = dd0.find_terminal(dd0.tree.get_root(), &x).unwrap();
+            let val = out.0.value.aff.apply(&x);
 
             assert_relative_eq!(gt, val, epsilon = 1e-08, max_relative = 1e-05);
         }
@@ -153,13 +164,8 @@ mod tests {
                                             poly.distance(point)
                                         );
                                     }
-                                } else {
-                                    if wit.contains(point) {
-                                        println!(
-                                            "Parent solution incorrectly inherited: {:?}",
-                                            data
-                                        );
-                                    }
+                                } else if wit.contains(point) {
+                                    println!("Parent solution incorrectly inherited: {:?}", data);
                                 }
                             }
                         }

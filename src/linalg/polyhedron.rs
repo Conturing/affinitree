@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -14,14 +14,13 @@
 
 //! Feasibility tests for polytopes based on LP solving
 
-#[cfg(feature = "minilp")]
-use minilp::{Problem, Variable};
+use std::iter::zip;
 
 #[cfg(feature = "highs")]
 use highs::{self, Col, HighsModelStatus, RowProblem, Sense, SolvedModel};
-
+#[cfg(feature = "minilp")]
+use minilp::{Problem, Variable};
 use ndarray::{self, Array1};
-use std::iter::zip;
 
 use super::affine::Polytope;
 
@@ -184,15 +183,13 @@ impl Polytope {
 
 #[cfg(test)]
 mod tests {
-    use crate::linalg::polyhedron::Polytope;
-    use crate::linalg::polyhedron::PolytopeStatus;
-    use crate::poly;
     use approx::assert_relative_eq;
-
     #[cfg(feature = "highs")]
     use highs::{HighsModelStatus, RowProblem, Sense};
-
     use ndarray::{arr1, arr2, array, s, Array1};
+
+    use super::*;
+    use crate::poly;
 
     fn init_logger() {
         use env_logger::Target;
@@ -223,6 +220,7 @@ mod tests {
         let bias = arr1(&[-1.0, -1.0, 4.0, 4.0, -3.0, 6.0, -2.0, -8.0]);
         let poly = Polytope::from_mats(weights, bias);
 
+        // Checked against scipy v1.11.4
         assert!(poly.is_feasible());
     }
 
@@ -243,6 +241,7 @@ mod tests {
         let bias = arr1(&[-1.0, -1.0, 4.0, 4.0, -3.0, 6.0, -2.0, -11.0]);
         let poly = Polytope::from_mats(weights, bias);
 
+        // Checked against scipy v1.11.4
         assert!(!poly.is_feasible());
     }
 
@@ -308,7 +307,20 @@ mod tests {
         ]);
         let poly = Polytope::from_mats(weights, bias);
 
+        // Checked against scipy v1.11.4
         assert!(!poly.is_feasible());
+    }
+
+    #[test]
+    pub fn test_lp_solve_feasible03() {
+        init_logger();
+
+        let weights = arr2(&[[0.0, 0.0, 0.0, 0.0]]);
+        let bias = arr1(&[0.12]);
+        let poly = Polytope::from_mats(weights, bias);
+
+        // Mathematically sound
+        assert!(poly.is_feasible());
     }
 
     #[test]
@@ -319,10 +331,39 @@ mod tests {
         let bias = arr1(&[-0.12]);
         let poly = Polytope::from_mats(weights, bias);
 
+        // Mathematically sound
         assert!(!poly.is_feasible());
     }
 
     #[test]
+    pub fn test_lp_solve_feasible04() {
+        init_logger();
+
+        let weights = arr2(&[
+            [1.0, -2.0, -3.0],
+            [2.0, -1.0, 3.0],
+            [-3.0, -1.0, 2.0],
+            [-10.0, -1.0, 9.0],
+            [9.0, -4.0, -13.0],
+            [14.0, -7.0, -21.0],
+            [-55.0, -2.0, 53.0],
+            [-160.0, 5.0, 165.0],
+            [193.0, -78.0, -271.0],
+            [999.0, -122.0, -1121.0],
+            [311.0, -13.0, -324.0],
+            [-81719.0, 60517.0, 142236.0],
+        ]);
+        let bias = arr1(&[
+            -3.0, -1.0, -2.0, -6.0, -7.0, -21.0, -17.0, -56.0, -109.0, 61.0, -169.0, 10000000.0,
+        ]);
+
+        let poly = Polytope::from_mats(weights, bias);
+        // Checked against scipy v1.11.4
+        assert!(poly.is_feasible());
+    }
+
+    #[test]
+    #[cfg_attr(feature = "highs", ignore = "error in rust version of highs solver")]
     pub fn test_lp_solve_infeasible04() {
         init_logger();
 
@@ -351,33 +392,8 @@ mod tests {
         assert!(poly.is_feasible());
 
         let poly = Polytope::from_mats(weights, bias);
+        // Checked against scipy v1.11.4 (highs failed)
         assert!(!poly.is_feasible());
-    }
-
-    #[test]
-    pub fn test_lp_solve_feasible04() {
-        init_logger();
-
-        let weights = arr2(&[
-            [1.0, -2.0, -3.0],
-            [2.0, -1.0, 3.0],
-            [-3.0, -1.0, 2.0],
-            [-10.0, -1.0, 9.0],
-            [9.0, -4.0, -13.0],
-            [14.0, -7.0, -21.0],
-            [-55.0, -2.0, 53.0],
-            [-160.0, 5.0, 165.0],
-            [193.0, -78.0, -271.0],
-            [999.0, -122.0, -1121.0],
-            [311.0, -13.0, -324.0],
-            [-81719.0, 60517.0, 142236.0],
-        ]);
-        let bias = arr1(&[
-            -3.0, -1.0, -2.0, -6.0, -7.0, -21.0, -17.0, -56.0, -109.0, 61.0, -169.0, 10000000.0,
-        ]);
-
-        let poly = Polytope::from_mats(weights, bias);
-        assert!(poly.is_feasible());
     }
 
     #[test]
@@ -406,10 +422,12 @@ mod tests {
             weights.slice(s![2.., ..]).to_owned(),
             bias.slice(s![2..]).to_owned(),
         );
+        // Checked against scipy v1.11.4
         assert!(!poly.is_feasible());
     }
 
     #[test]
+    #[cfg_attr(feature = "highs", ignore = "error in rust version of highs solver")]
     pub fn test_lp_solve_infeasible06() {
         init_logger();
 
@@ -448,6 +466,7 @@ mod tests {
         assert!(poly.is_feasible());
 
         let poly = Polytope::from_mats(weights, bias);
+        // Checked against scipy v1.11.4 (highs failed)
         assert!(!poly.is_feasible());
     }
 
@@ -459,6 +478,7 @@ mod tests {
         let bias = arr1(&[-1.0, -1.0]);
 
         let poly = Polytope::from_mats(weights, bias);
+        // Mathematically sound
         assert!(poly.is_feasible());
     }
 
@@ -485,69 +505,6 @@ mod tests {
         assert!(status != HighsModelStatus::Unknown);
     }
 
-    #[test]
-    pub fn test_solve_feasible() {
-        let poly = poly!(
-            [
-                [-2, -1],
-                [-1, -2],
-                [-0.5, -5],
-                [-3, 1],
-                [1, 1],
-                [1, -7],
-                [2, 0.2]
-            ] < [-1, -1.5, -1, 0, 6, 4, 3]
-        );
-
-        assert!(matches!(
-            poly.solve_linprog(Array1::zeros(2), false),
-            PolytopeStatus::Optimal(_)
-        ));
-    }
-
-    #[test]
-    pub fn test_solve_feasible_2() {
-        let poly = poly!(
-            [
-                [1, 1],
-                [-1, -2],
-                [-2, -1],
-                [1, 5],
-                [7, 1],
-                [-2, -3],
-                [1, -3]
-            ] < [5, -2, 0.5, 30, 28, -4, 5]
-        );
-
-        assert!(matches!(
-            poly.solve_linprog(Array1::zeros(2), false),
-            PolytopeStatus::Optimal(_)
-        ));
-    }
-
-    #[test]
-    pub fn test_solve_feasible_3() {
-        let poly = poly!(
-            [
-                [-1, 0],
-                [0, -1],
-                [1, 0],
-                [0, 1],
-                [-1, -1],
-                [1, 1],
-                [-1, 1],
-                [-2, -1]
-            ] < [-1, -1, 4, 4, -3, 6, -2, -8]
-        );
-
-        assert!(matches!(
-            poly.solve_linprog(Array1::zeros(2), false),
-            PolytopeStatus::Optimal(_)
-        ));
-    }
-
-    // The following two tests check whether the HIGHS configuration fails with simple linear programs
-
     #[cfg(feature = "highs")]
     #[test]
     pub fn test_row_problem() {
@@ -572,6 +529,70 @@ mod tests {
         let solved = model.solve();
 
         print!("{solved:?}");
+    }
+
+    #[test]
+    pub fn test_solve_feasible() {
+        let poly = poly!(
+            [
+                [-2, -1],
+                [-1, -2],
+                [-0.5, -5],
+                [-3, 1],
+                [1, 1],
+                [1, -7],
+                [2, 0.2]
+            ] < [-1, -1.5, -1, 0, 6, 4, 3]
+        );
+
+        // Checked against scipy v1.11.4
+        assert!(matches!(
+            poly.solve_linprog(Array1::zeros(2), false),
+            PolytopeStatus::Optimal(_)
+        ));
+    }
+
+    #[test]
+    pub fn test_solve_feasible_2() {
+        let poly = poly!(
+            [
+                [1, 1],
+                [-1, -2],
+                [-2, -1],
+                [1, 5],
+                [7, 1],
+                [-2, -3],
+                [1, -3]
+            ] < [5, -2, 0.5, 30, 28, -4, 5]
+        );
+
+        // Checked against scipy v1.11.4
+        assert!(matches!(
+            poly.solve_linprog(Array1::zeros(2), false),
+            PolytopeStatus::Optimal(_)
+        ));
+    }
+
+    #[test]
+    pub fn test_solve_feasible_3() {
+        let poly = poly!(
+            [
+                [-1, 0],
+                [0, -1],
+                [1, 0],
+                [0, 1],
+                [-1, -1],
+                [1, 1],
+                [-1, 1],
+                [-2, -1]
+            ] < [-1, -1, 4, 4, -3, 6, -2, -8]
+        );
+
+        // Checked against scipy v1.11.4
+        assert!(matches!(
+            poly.solve_linprog(Array1::zeros(2), false),
+            PolytopeStatus::Optimal(_)
+        ));
     }
 
     #[test]
@@ -633,11 +654,11 @@ mod tests {
         ]);
 
         let poly = Polytope::from_mats(weights, bias);
+        // Checked against scipy v1.11.4
         assert!(!matches!(poly.status(), PolytopeStatus::Infeasible));
     }
 
     #[test]
-    #[ignore = "error in rust version of highs solver"]
     pub fn test_polytope_status_1() {
         init_logger();
 
@@ -696,7 +717,8 @@ mod tests {
         ]);
 
         let poly = Polytope::from_mats(weights, bias);
-        assert!(!matches!(poly.status(), PolytopeStatus::Infeasible));
+        // Checked against scipy v1.11.4
+        assert!(matches!(poly.status(), PolytopeStatus::Infeasible));
     }
 
     #[test]
@@ -779,6 +801,7 @@ mod tests {
         ]);
 
         let poly = Polytope::from_mats(weights, bias);
+        // Checked against scipy v1.11.4
         assert!(matches!(poly.status(), PolytopeStatus::Infeasible));
     }
 

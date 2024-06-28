@@ -1,3 +1,17 @@
+//   Copyright 2024 affinitree developers
+//
+//   Licensed under the Apache License, Version 2.0 (the "License");
+//   you may not use this file except in compliance with the License.
+//   You may obtain a copy of the License at
+//
+//       http://www.apache.org/licenses/LICENSE-2.0
+//
+//   Unless required by applicable law or agreed to in writing, software
+//   distributed under the License is distributed on an "AS IS" BASIS,
+//   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//   See the License for the specific language governing permissions and
+//   limitations under the License.
+
 /// The following test case has as subject the absolute value function.
 ///
 /// The test case first manually constructs the function and then asserts
@@ -7,7 +21,6 @@ mod tests {
     use affinitree::linalg::affine::PolyRepr;
     use affinitree::pwl::afftree::AffTree;
     use affinitree::{aff, poly};
-
     use approx::assert_relative_eq;
     use ndarray::arr1;
 

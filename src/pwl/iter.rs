@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -16,12 +16,13 @@
 
 use log::trace;
 
-use crate::linalg::affine::Polytope;
-
 use super::node::AffContent;
+use crate::linalg::affine::Polytope;
 use crate::tree::graph::{Tree, TreeIndex};
-use crate::tree::iter::{DfsNodeData, DfsPre};
+use crate::tree::iter::{DfsNodeData, DfsPre, TraversalMut};
 
+/// A depth-first iterator over an [``AffTree``] instance that also provides the path condition
+/// in form of a [``Polytope``].
 #[derive(Clone, Debug)]
 pub struct PolyhedraGen {
     pub(super) predicates: Vec<Polytope>,
@@ -30,25 +31,29 @@ pub struct PolyhedraGen {
 }
 
 impl PolyhedraGen {
+    /// Creates a new iterator over the given ``tree`` starting at its root node.
     #[inline]
     pub fn new<const K: usize>(tree: &Tree<AffContent, K>) -> PolyhedraGen {
         Self::with_root(tree, tree.get_root_idx())
     }
 
+    /// Creates a new iterator over the given ``tree`` starting at the given ``root``.
     #[inline]
     pub fn with_root<const K: usize>(tree: &Tree<AffContent, K>, root: TreeIndex) -> PolyhedraGen {
         PolyhedraGen {
             predicates: Vec::with_capacity((tree.len() as f64).log2().ceil() as usize),
-            iter: DfsPre::with_root(tree, root),
+            iter: DfsPre::new(tree, root),
             last_depth: 0,
         }
     }
 
+    /// Alters the iteration such that the subtree of the current node is skipped.
     #[inline]
     pub fn skip_subtree(&mut self) {
         self.iter.skip_subtree()
     }
 
+    /// Returns the next node in the iteration, together with the current depth and the path condition.
     pub fn next<const K: usize>(
         &mut self,
         tree: &Tree<AffContent, K>,
@@ -68,9 +73,7 @@ impl PolyhedraGen {
         if let Some(edg) = tree.parent(node_idx) {
             trace!(
                 "Edge {} -{}-> {}",
-                edg.source_idx,
-                edg.label,
-                edg.target_idx
+                edg.source_idx, edg.label, edg.target_idx
             );
             let factor = match edg.label {
                 1 => -1.0,
@@ -85,11 +88,16 @@ impl PolyhedraGen {
         Some((data, &self.predicates))
     }
 
+    /// Returns the current path conditions in the order of the path.
     pub fn current_polytope(&self) -> &Vec<Polytope> {
         &self.predicates
     }
 }
 
+/// Wrapper of [``PolyhedraGen``] that implements the [``Iterator``] trait.
+///
+/// While iterators are more convenient to use, they require certain borrowing patterns
+/// making it impossible to modify the tree during iteration.
 #[derive(Debug)]
 pub struct PolyhedraIter<'a, const K: usize> {
     pub iter: PolyhedraGen,
@@ -97,6 +105,7 @@ pub struct PolyhedraIter<'a, const K: usize> {
 }
 
 impl<'a, const K: usize> PolyhedraIter<'a, K> {
+    /// Creates a new iterator over the given ``tree`` starting at its root node.
     pub fn new(tree: &Tree<AffContent, K>) -> PolyhedraIter<'_, K> {
         PolyhedraIter {
             iter: PolyhedraGen::new(tree),
@@ -104,6 +113,7 @@ impl<'a, const K: usize> PolyhedraIter<'a, K> {
         }
     }
 
+    /// Alters the iteration such that the subtree of the current node is skipped.
     pub fn skip_subtree(&mut self) {
         self.iter.skip_subtree()
     }

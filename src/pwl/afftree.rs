@@ -1,4 +1,4 @@
-//   Copyright 2023 affinitree developers
+//   Copyright 2024 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -15,30 +15,24 @@
 //! Central data structure to store piece-wise linear functions
 
 use core::fmt;
+use std::cell::RefCell;
 use std::fmt::Display;
-use std::iter::IntoIterator;
 use std::mem;
-use std::{cell::RefCell, iter::zip};
 
 use itertools::Itertools;
-use log::{debug, error, warn};
-
 use ndarray::{concatenate, Array1, Array2, Axis};
 
-use super::{
-    iter::PolyhedraIter,
-    node::{write_children, AffContent},
-};
+use super::iter::PolyhedraIter;
+use super::node::{write_children, AffContent};
 use crate::linalg::affine::{AffFunc, Polytope};
-use crate::linalg::polyhedron::PolytopeStatus;
-use crate::pwl::node::AffNode;
-use crate::pwl::{iter::PolyhedraGen, node::NodeState};
+use crate::pwl::iter::PolyhedraGen;
+use crate::pwl::node::{AffNode, NodeState};
 use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
 
-/// A corner stone of `affinitree` that can represent any (continuous or non-continuous) [piece-wise linear function](https://en.wikipedia.org/wiki/Piecewise_linear_function).
+/// A specialized decision tree to hold [piece-wise linear functions](https://en.wikipedia.org/wiki/Piecewise_linear_function).
 ///
 /// This structure is based on an oblique decision tree:
-/// * Its inner nodes form a decision structure that partitions the input space similar to a [BSP tree](https://en.wikipedia.org/wiki/Binary_space_partitioning) into convex regions.
+/// * Its inner nodes form a decision structure that partitions the input space similar to a [BSP tree](https://en.wikipedia.org/wiki/Binary_space_partitioning) into convex polyhedral regions.
 /// * Its terminal nodes associate with each such region a linear function.
 ///
 /// Technically, each decision node divides the space into two halfspace which are separated by
@@ -60,7 +54,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
 ///
 /// This tree is constructed in `affinitree` as follows:
 /// ```rust
-/// use affinitree::{aff, poly, pwl::afftree::AffTree, pwl::dot::dot_str, linalg::affine::PolyRepr};
+/// use affinitree::{aff, poly, pwl::afftree::AffTree, pwl::dot::Dot, linalg::affine::PolyRepr};
 ///
 /// // construct a new AffTree instance with the given inequality as its root.
 /// let mut dd = AffTree::<2>::from_aff(poly!([[1, 1]] < [0]).convert_to(PolyRepr::MatrixBiasGeqZero)); // node index 0
@@ -77,9 +71,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
 /// dd.add_terminal(2, 1, aff!([[0, -1]] + [0]));
 ///
 /// // export the tree into the DOT format of graphviz
-/// let mut str = String::new();
-/// dot_str(&mut str, &dd).unwrap();
-/// println!("{}", str);
+/// println!("{}", Dot::from(&dd));
 /// // digraph dd {
 /// // bgcolor=transparent;
 /// // concentrate=true;
@@ -101,9 +93,9 @@ use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
 /// ```
 ///
 /// # Technical Overview
-/// `AffTree`s are implemented over an arena provided by the `slab` crate.
+/// `AffTree`s are implemented over an arena provided by the [`slab`] crate.
 /// They have a compile time branching factor `K` (in most cases a binary tree is sufficient, i.e., K=2).
-/// Elements of the tree have a unique index during their lifetime.
+/// Each node of the tree has a unique index during its lifetime.
 ///
 /// # Composition
 /// `AffTree`s allow a modular construction by composition. The semantics of composition
@@ -132,6 +124,51 @@ use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
 ///     comp.evaluate(&arr1(&[2., -7.])).unwrap()
 /// );
 /// ```
+///
+/// # Infeasible Path Elimination
+/// In an [AffTree], the (linear) predicates along a path can exhibit semantic dependencies.
+/// For example, when considering the path conditions "x > 5, y < 2, x < 2" one notices
+/// that there cannot be a possible assignment to x and y that satisfies all three conditions
+/// at the same time. In that case we say the path is *infeasible*.
+///
+/// In general, a path in an [AffTree] is infeasible when the polytope defined by the conjunction
+/// of all path conditions is the empty set. This can be checked with LP solvers.
+/// As infeasible paths cannot be taken by any input, they can be safely removed without altering
+/// the represented piece-wise linear function.
+///
+/// ```rust
+/// use affinitree::{aff, pwl::afftree::AffTree};
+/// use ndarray::arr1;
+///
+/// let mut dd = AffTree::<2>::from_aff(aff!([[1, 0]] + [-5]));
+/// dd.add_child_node(0, 1, aff!([[0, -1]] + [2]));
+/// dd.add_child_node(1, 1, aff!([[-1, 0]] + [2]));
+/// // feasible
+/// dd.add_child_node(2, 0, aff!([[0, 0]] + [0]));
+/// // infeasible
+/// dd.add_child_node(2, 1, aff!([[0, 0]] + [1]));
+///
+/// dd.infeasible_elimination();
+/// println!("{}", &dd);
+///
+/// assert!(dd.tree.contains(3));
+/// assert!(!dd.tree.contains(4));
+/// ```
+///
+/// # Arithmetic Operators
+/// A wide variety of arithmetic operators are defined for piece-wise linear functions.
+/// These are also available for [AffTree]s based on a general lifting principle for
+/// decision trees. Concretely, [AffTree]s support addition, subtraction, multiplication,
+/// division, and remainder (with inline operators +, -, *, /, %).
+///
+/// Other operators can be defined by implementing the [CompositionSchema] trait.
+///
+/// # Reduction
+/// A decision is redundant whenever all its children are (semantically) equivalent.
+/// Without enforcing some normal form, it is hard to detect semantic equivalence.
+/// However, one particular form can be computed linearly, by checking if the all
+/// children are syntactically equivalent. By performing a bottom-up sweep, [AffTree::reduce]
+/// eliminates any decision that whose terminal nodes are equal.
 #[derive(Clone)]
 pub struct AffTree<const K: usize> {
     pub tree: Tree<AffContent, K>,
@@ -169,13 +206,23 @@ impl<const K: usize> AffTree<K> {
 
     /// Crates an AffTree instance from the given polytope ``poly``.
     /// The resulting AffTree is a partial function that only accepts inputs inside
-    /// the given ``poly``, for which it returns the input as is.
+    /// the given ``poly``, which are then mapped using the given ``func_true``.
+    /// Inputs outside of ``poly`` are undefined when ``func_false`` is ``None``,
+    /// otherwise they are mapped by ``func_false``.
+    ///
     /// In this capacity it can be used as a precondition.
-    pub fn from_poly(poly: Polytope, func: AffFunc) -> AffTree<K> {
-        assert!(poly.indim() == func.indim());
+    pub fn from_poly(
+        poly: Polytope,
+        func_true: AffFunc,
+        func_false: Option<&AffFunc>,
+    ) -> AffTree<K> {
+        assert_eq!(poly.indim(), func_true.indim());
         assert!(poly.n_constraints() > 0);
+        if let Some(aff_false) = func_false {
+            assert_eq!(poly.indim(), aff_false.indim());
+        }
 
-        let mut tree = Self::with_capacity(func.indim(), poly.n_constraints() + 1);
+        let mut tree = Self::with_capacity(func_true.indim(), poly.n_constraints() + 1);
         let mut iter = poly.row_iter();
         let mut parent = tree.tree.get_root_idx();
         let mut aff = iter.next().unwrap().as_function().to_owned();
@@ -183,11 +230,17 @@ impl<const K: usize> AffTree<K> {
         tree.tree.node_value_mut(parent).unwrap().aff = aff;
 
         for decision in iter {
+            if let Some(aff_false) = func_false {
+                tree.add_child_node(parent, 0, aff_false.clone());
+            }
             let mut aff = decision.as_function().to_owned();
             aff.mat = -aff.mat;
             parent = tree.add_child_node(parent, 1, aff);
         }
-        tree.add_child_node(parent, 1, func);
+        if let Some(aff_false) = func_false {
+            tree.add_child_node(parent, 0, aff_false.clone());
+        }
+        tree.add_child_node(parent, 1, func_true);
 
         tree
     }
@@ -250,22 +303,28 @@ impl<const K: usize> AffTree<K> {
     /// Returns an iterator over the nodes of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn nodes(&self) -> impl Iterator<Item = &AffContent> {
-        self.tree.nodes().map(|nd| nd.value)
+        self.tree.nodes()
+                 .map(|nd| nd.value)
     }
 
     /// Returns an iterator over the terminal nodes of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn terminals(&self) -> impl Iterator<Item = &AffContent> {
-        self.tree.terminals().map(|nd| nd.value)
+        self.tree.terminals()
+                 .map(|nd| nd.value)
     }
 
     /// Returns an iterator over the decision nodes of this tree.
     /// Nodes are read in index order (continuous in memory) for increased efficiency.
     #[inline]
+    #[rustfmt::skip]
     pub fn decisions(&self) -> impl Iterator<Item = &AffContent> {
-        self.tree.decisions().map(|nd| nd.value)
+        self.tree.decisions()
+                 .map(|nd| nd.value)
     }
 
     /// Returns an iterator like object that performs a depth-first search over this tree.
@@ -299,7 +358,7 @@ impl<const K: usize> AffTree<K> {
     /// For each node in the tree four entries are returned:
     /// 1. the current depth,
     /// 2. the index of the current node,
-    /// 3. the number of siblings of the current node that have not been vistied yet,
+    /// 3. the number of siblings of the current node that have not been visited yet,
     /// 4. the halfspaces of the path leading to the current node
     ///
     /// For mutual access during iteration see `polyhedra_iter`.
@@ -410,54 +469,61 @@ impl<const K: usize> AffTree<K> {
         self.tree.tree_node_mut(node).unwrap().isleaf = false;
     }
 
-    /// Evaluates this AffTree instance under the given ``input``.
-    ///
-    /// If a maximal iteration number is reached, this function returns ``None``.
+    /// Evaluates this AffTree instance as a piece-wise linear function under
+    /// the given `input`.
     ///
     /// # Panics
     ///
-    /// If the input does not evaluate to a terminal node of this tree.
+    /// When a node id is not found in the tree or when usize::MAX edges were followed.
     #[inline]
     pub fn evaluate(&self, input: &Array1<f64>) -> Option<Array1<f64>> {
-        self.evaluate_to_terminal(self.tree.get_root(), input, 512)
-            .map(|(func, _)| func.apply(input))
+        self.find_terminal(self.tree.get_root(), input)
+            .map(|(func, _)| func.value.aff.apply(input))
     }
 
-    /// Evaluates this AffTree instance under the given ``input``, returning the corresponding terminal node.
-    /// The evaluation is started at the given ``node`` to a maximum depth of ``max_iter``.
+    /// Evaluates this AffTree instance under the given `input` starting at `root`.
+    /// Each encountered decision predicate is evaluated under the given input and the
+    /// corresponding edge is followed until a terminal nodes is reached, which is
+    /// then returned together with the label sequence of the path.
+    ///
+    /// Returns None when some taken edge has no target node.
     ///
     /// # Panics
     ///
-    /// If the input does not evaluate to a terminal node of this tree.
-    pub fn evaluate_to_terminal<'a>(
+    /// When a node id is not found in the tree or when usize::MAX edges were followed.
+    pub fn find_terminal<'a>(
         &'a self,
-        node: &'a AffNode<K>,
+        root: &'a AffNode<K>,
         input: &Array1<f64>,
-        max_iter: i32,
-    ) -> Option<(&AffFunc, Vec<Label>)> {
-        let mut current_node = node;
+    ) -> Option<(&TreeNode<AffContent, K>, Vec<Label>)> {
+        let mut current_node = root;
         let mut label_seq = Vec::new();
+        let mut iter = 0;
 
-        for _ in 0..max_iter {
+        while iter < usize::MAX {
+            iter += 1;
             if current_node.isleaf {
                 debug_assert!(
                     current_node.children.iter().all(Option::is_none),
-                    "Tree invariant violated: leaf node has children."
+                    "nodes that are marked as leafs should not have any children"
                 );
-                return Some((&current_node.value.aff, label_seq));
+                return Some((&current_node, label_seq));
             }
 
-            let label = self.evaluate_node(current_node, input);
+            let label = self.evaluate_decision(current_node, input);
             label_seq.push(label);
-            let successor_idx = current_node.children[label]
-                .expect(&format!("Node has no successor for label {}", &label));
-            current_node = self.tree.tree_node(successor_idx)?;
+            let successor_idx = current_node.children[label]?;
+            current_node = self
+                .tree
+                .tree_node(successor_idx)
+                .expect("tree should contain the children of another node");
         }
 
-        None
+        panic!("tree should by acyclic and have a maximial depth of usize::MAX-1");
     }
 
-    pub fn evaluate_node(&self, node: &AffNode<K>, input: &Array1<f64>) -> Label {
+    /// Evaluates the given `node` as a linear decision under the given `input`.
+    pub fn evaluate_decision(&self, node: &AffNode<K>, input: &Array1<f64>) -> Label {
         let node_eval = node.value.aff.apply(input).map(|x| *x >= 0.);
         Self::index_from_label(node_eval)
     }
@@ -504,488 +570,6 @@ impl<const K: usize> AffTree<K> {
             node.aff.mat = concatenate(Axis(1), restricted_mat.as_slice()).unwrap();
             node.state = NodeState::Indeterminate;
         }
-    }
-
-    /* Composition */
-
-    /// Extends self such that it represents the result of mathematical function composition
-    /// of this tree and other.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use affinitree::{aff, pwl::afftree::AffTree};
-    /// use ndarray::arr1;
-    ///
-    /// let mut tree0 = AffTree::<2>::from_aff(aff!([[1., 0.]] + [2.]));
-    /// tree0.add_child_node(0, 0, aff!([[2, 0], [0, 2]] + [1, 0]));
-    /// tree0.add_child_node(0, 1, aff!([[2, 0], [0, 2]] + [0, 1]));
-    ///
-    /// let mut tree1 = AffTree::<2>::from_aff(aff!([[-0.5, 0.]] + [-1.]));
-    /// tree1.add_child_node(0, 0, aff!([[3, 0], [0, 3]] + [5, 0]));
-    /// tree1.add_child_node(0, 1, aff!([[-3, 0], [0, -3]] + [0, 5]));
-    ///
-    /// let mut comp = tree0.clone();
-    /// comp.compose::<false>(&tree1);
-    ///
-    /// assert_eq!(
-    ///     tree1.evaluate(&tree0.evaluate(&arr1(&[2., -7.])).unwrap()).unwrap(),
-    ///     comp.evaluate(&arr1(&[2., -7.])).unwrap()
-    /// );
-    /// ```
-    #[inline]
-    pub fn compose<const PRUNE: bool>(&mut self, other: &AffTree<K>) {
-        if PRUNE {
-            AffTree::lift_func(
-                other,
-                self,
-                self.tree.terminal_indices().collect_vec(),
-                |a, b| a.compose(b),
-                |a, b| a.compose(b),
-                |tree, src_idx, dest_idx| tree.is_edge_feasible(src_idx, dest_idx),
-            )
-        } else {
-            AffTree::lift_func(
-                other,
-                self,
-                self.tree.terminal_indices().collect_vec(),
-                |a, b| a.compose(b),
-                |a, b| a.compose(b),
-                |_, _, _| true,
-            )
-        }
-    }
-
-    #[inline]
-    pub fn compose_trees(lhs: &AffTree<K>, rhs: &mut AffTree<K>) {
-        AffTree::lift_func(
-            lhs,
-            rhs,
-            rhs.tree.terminal_indices().collect_vec(),
-            |a, b| a.compose(b),
-            |a, b| a.compose(b),
-            |tree, src_idx, dest_idx| !tree.is_edge_feasible(src_idx, dest_idx),
-        )
-    }
-
-    /// Apply the function f encoded by lhs to rhs.
-    /// Technically, this is implemented by appending a copy of lhs to every terminal in rhs.
-    /// Two callbacks are provided that can update nodes depending on the operation performed, thus
-    /// allowing to encode a variety of functions.
-    ///
-    /// Each inner node in lhs is updated with the callback nonterminal_func which receives the current inner node of lhs and the terminal node of rhs where this copy is appended.
-    /// Each terminal node in lhs is updated with the callback terminal_func which receives the current terminal node of lhs and the terminal node of rhs where this copy is appended.
-    pub fn lift_func<I, NFn, TFn, IFn>(
-        lhs: &AffTree<K>,
-        rhs: &mut AffTree<K>,
-        terminals: I,
-        nonterminal_func: NFn,
-        terminal_func: TFn,
-        is_feasible: IFn,
-    ) where
-        I: IntoIterator<Item = TreeIndex>,
-        NFn: Fn(&AffFunc, &AffFunc) -> AffFunc,
-        TFn: Fn(&AffFunc, &AffFunc) -> AffFunc,
-        IFn: Fn(&AffTree<K>, TreeIndex, TreeIndex) -> bool,
-    {
-        for terminal_idx in terminals.into_iter() {
-            let terminal = rhs.tree.tree_node(terminal_idx).unwrap();
-
-            let terminal_val = terminal.value.aff.clone();
-            let new_root_aff = match lhs.tree.get_root().isleaf {
-                true => terminal_func(&lhs.tree.get_root().value.aff, &terminal_val),
-                false => nonterminal_func(&lhs.tree.get_root().value.aff, &terminal_val),
-            };
-
-            let new_root = rhs.replace_node(terminal_idx, new_root_aff);
-
-            let mut stack: Vec<(TreeIndex, TreeIndex)> =
-                Vec::with_capacity(lhs.tree.num_terminals());
-            stack.push((lhs.tree.get_root_idx(), new_root));
-
-            while let Some((parent0_idx, parent1_idx)) = stack.pop() {
-                for edg in lhs.tree.children(parent0_idx) {
-                    let child0_idx = edg.target_idx;
-                    let child0 = edg.target_value;
-                    let label = edg.label;
-
-                    debug!("Processing left tree child with id: {:?}", child0_idx);
-                    let new_value = match lhs.tree.is_leaf(child0_idx).unwrap() {
-                        true => terminal_func(&child0.aff, &terminal_val),
-                        false => nonterminal_func(&child0.aff, &terminal_val),
-                    };
-
-                    let child1_idx =
-                        rhs.tree
-                            .add_child_node(parent1_idx, label, AffContent::new(new_value));
-
-                    // Test feasibility of newly created edge, remove if infeasible
-                    if is_feasible(rhs, parent1_idx, child1_idx) {
-                        stack.push((child0_idx, child1_idx));
-                    } else {
-                        rhs.tree.remove_child(parent1_idx, label);
-                    }
-                }
-            }
-        }
-        // return (rhs, new_nodes);
-    }
-
-    /* Feasibility functions */
-
-    /// Tries to derive solutions for ``poly`` based on the given ``points``.
-    ///
-    /// This function iteratively maximizes the signed distance of each point to each of the
-    /// supporting hyperplanes of ``poly``. When all distances are positive, the point lies
-    /// inside the polytope and is thus a solution.
-    /// This is a heuristic that ignores the interaction between the hyperplanes for improved speed
-    /// at the cost of completeness.
-    /// If after ``n_iterations`` no solution is found, ``None`` is returned.
-    /// Otherwise, if at any point a valid solution is found, the function returns all valid solutions up to that point.
-    ///
-    /// The first iteration corresponds to a simple containment check.
-    ///
-    /// The columns of ``points`` and of the return value represent the points.
-    pub fn mirror_points(
-        poly: &Polytope,
-        points: &Array2<f64>,
-        n_iterations: usize,
-    ) -> Option<Array2<f64>> {
-        assert_eq!(poly.indim(), points.shape()[0]);
-
-        let poly_norm = poly.clone().normalize();
-
-        let _dim_points = points.shape()[0];
-        let n_points = points.shape()[1];
-        let mut candidates = points.to_owned();
-
-        for _count in 0..n_iterations {
-            let b_bias = poly_norm
-                .bias
-                .broadcast((n_points, poly_norm.bias.shape()[0]))
-                .unwrap();
-            let mut distances = &b_bias.t() - &poly_norm.mat.dot(&candidates);
-
-            // move distances a little away from the polytope to increase numerical robustness
-            distances.map_inplace(|val| {
-                *val -= -1e-10;
-            });
-
-            // check if new points are solutions of poly
-            let contained_points = zip(candidates.axis_iter(Axis(1)), distances.axis_iter(Axis(1)))
-                .filter(|(_, dist)| dist.iter().all(|val| *val >= 0.))
-                .map(|(point, _)| point.insert_axis(Axis(1)))
-                .collect_vec();
-
-            if !contained_points.is_empty() {
-                return Some(concatenate(Axis(1), contained_points.as_slice()).unwrap());
-            }
-
-            distances.map_inplace(|val| {
-                if *val >= 0. {
-                    *val = 0.;
-                } else {
-                    *val *= 1.1;
-                    *val -= 1e-10;
-                }
-            });
-
-            for (mut point, dist) in zip(
-                candidates.axis_iter_mut(Axis(1)),
-                distances.axis_iter_mut(Axis(1)),
-            ) {
-                let step_vec = &poly_norm.mat
-                    * &dist
-                        .broadcast((poly_norm.mat.shape()[1], dist.shape()[0]))
-                        .unwrap()
-                        .t();
-
-                point += &step_vec
-                    .outer_iter()
-                    .fold(Array1::zeros(poly_norm.mat.shape()[1]), |acc, x| acc + x);
-            }
-        }
-
-        None
-    }
-
-    pub fn merge_child_with_parent(
-        &mut self,
-        parent_idx: usize,
-        label: Label,
-    ) -> Option<TreeNode<AffContent, K>> {
-        self.tree.merge_child_with_parent(parent_idx, label)
-    }
-
-    /// Skips over redundant predicates in the tree.
-    ///
-    /// # Warning
-    ///
-    /// This function can alter the semantics of tree by removing paths that would
-    /// otherwise result in errors. It is up to the caller to ensure that this
-    /// behavior is either impossible (e.g., when all such paths are infeasible) or
-    /// that this is indeed the intended effect.
-    pub fn forward_if_redundant(&mut self, parent_idx: usize) -> Option<TreeNode<AffContent, K>> {
-        // check if parent_idx has exactly one child
-        let mut feasible_children = self
-            .tree
-            .children(parent_idx)
-            .filter(|child| child.target_value.state.is_feasible())
-            .collect_vec();
-
-        if feasible_children.len() != 1 {
-            return None;
-        }
-
-        // check if all other children are indeed infeasible
-        let infeasible_children = self
-            .tree
-            .children(parent_idx)
-            .filter(|child| child.target_value.state.is_infeasible())
-            .map(|x| x.edge())
-            .collect_vec();
-
-        debug_assert!(feasible_children.len() + infeasible_children.len() <= K);
-        if infeasible_children.len() != K - 1 {
-            return None;
-        }
-
-        // remove the infeasible children and forward the feasible
-        let feasible_child = feasible_children.pop().unwrap().edge();
-
-        for edg in &infeasible_children {
-            self.tree.remove_child(parent_idx, edg.label);
-        }
-
-        self.tree
-            .merge_child_with_parent(feasible_child.parent_idx, feasible_child.label)
-    }
-
-    /// Removes nodes from this tree that lie on infeasible paths.
-    ///
-    /// In a decision structure a path is called infeasible when the conjunction of
-    /// all decisions on that path is not satisfiable. As no input could ever take
-    /// such a path, these can be safely removed from the decision structure without
-    /// altering its semantics (i.e., without changing the represented piece-wise
-    /// linear function).
-    pub fn infeasible_elimination(&mut self) {
-        let mut to_remove: Vec<(Label, TreeIndex)> = Vec::with_capacity(16);
-
-        let mut iter = self.polyhedra();
-        while let Some((data, polyhedra)) = iter.next(&self.tree) {
-            let (depth, node_idx, n_remaining) = data.extract();
-            debug!("Visiting node {node_idx} in depth {depth}");
-
-            if node_idx == self.tree.get_root_idx() {
-                continue;
-            }
-
-            let node_value = self.tree.node_value(node_idx).unwrap();
-
-            // check node for cached solutions from previous runs
-            // continue only when the node hasn't been checked before (NodeState::Indeterminate)
-            match &node_value.state {
-                NodeState::Indeterminate => {}
-                NodeState::Infeasible => {
-                    iter.skip_subtree();
-                    continue;
-                }
-                NodeState::Feasible | NodeState::FeasibleWitness(_) => continue,
-            }
-
-            let (parent_idx, _parent_value, label) = {
-                let edg = self.tree.parent(node_idx).unwrap();
-                (edg.source_idx, edg.source_value, edg.label)
-            };
-
-            let hyperplane = polyhedra.last().unwrap();
-            // the polytope implied by the path from root to current node
-            let poly = Polytope::intersection_n(self.in_dim(), polyhedra.as_slice());
-
-            let mut state = self.phase_inh(parent_idx, hyperplane);
-
-            if matches!(state, NodeState::Indeterminate) {
-                state = self.phase_one(parent_idx, &poly);
-            }
-
-            if matches!(state, NodeState::Indeterminate) {
-                state = self.phase_two(node_idx, &poly);
-            }
-
-            if let NodeState::Infeasible = &state {
-                to_remove.push((label, parent_idx));
-                iter.skip_subtree();
-            }
-
-            let node_value = self.tree.node_value_mut(node_idx).unwrap();
-            node_value.state = state;
-
-            // after all siblings have been checked, clean up if parent is redundant
-            if n_remaining == 0 {
-                self.forward_if_redundant(parent_idx);
-            }
-        }
-
-        for (label, node) in to_remove {
-            self.tree.try_remove_child(node, label);
-        }
-    }
-
-    /// Test if any parent solution is sufficient for this node.
-    fn phase_inh(&self, parent_idx: TreeIndex, hyperplane: &Polytope) -> NodeState {
-        let parent_value = self.tree.node_value(parent_idx).unwrap();
-        match &parent_value.state {
-            NodeState::FeasibleWitness(solution) => {
-                assert!(
-                    !solution.is_empty(),
-                    "Invalid state: No feasibility witnesses stored"
-                );
-
-                let inherited_solutions = solution
-                    .iter()
-                    .filter(|point| hyperplane.contains(point))
-                    .map(|point| point.to_owned())
-                    .collect_vec();
-
-                if !inherited_solutions.is_empty() {
-                    return NodeState::FeasibleWitness(inherited_solutions);
-                }
-            }
-            _ => {}
-        }
-        NodeState::Indeterminate
-    }
-
-    /// Try to derive new solutions based on the cached solutions of the parent node.
-    /// The returned node state is with respect to the child that matches poly.
-    fn phase_one(&self, parent_idx: TreeIndex, poly: &Polytope) -> NodeState {
-        let parent_value = self.tree.node_value(parent_idx).unwrap();
-        match &parent_value.state {
-            NodeState::FeasibleWitness(solution) => {
-                assert!(!solution.is_empty(), "Invalid state: No feasibility witnesses stored");
-
-                // pack all solutions into a 2D array such that each column represents one solution
-                let mut array = Array2::<f64>::zeros((solution[0].shape()[0], solution.len()));
-                for (mut column, point) in zip(array.axis_iter_mut(Axis(1)), solution.iter()) {
-                    column.assign(point);
-                }
-
-                let node_solutions = AffTree::<K>::mirror_points(poly, &array, 8);
-
-                if let Some(node_solutions) = node_solutions {
-                    let vec = node_solutions.axis_iter(Axis(1))
-                        .map(|x| x.to_owned())
-                        .collect_vec();
-
-                    return NodeState::FeasibleWitness(vec);
-                }
-            }
-            NodeState::Feasible => warn!("Invalid state: Parent cache was cleared before all children have been checked."),
-            NodeState::Infeasible => error!("Invalid state: Parent node is reported as infeasible but one of its childs was explored."),
-            NodeState::Indeterminate => error!("Invalid state: A child node is explored before its parent")
-        }
-        NodeState::Indeterminate
-    }
-
-    /// Determine if the polytope is feasible utilizing LP solvers
-    fn phase_two(&self, _node_idx: TreeIndex, poly: &Polytope) -> NodeState {
-        debug!("Phase II. Solving LP {:?}", &poly);
-        match poly.status() {
-            PolytopeStatus::Optimal(solution) => NodeState::FeasibleWitness(vec![solution]),
-            PolytopeStatus::Infeasible => NodeState::Infeasible,
-            PolytopeStatus::Unbounded => NodeState::Feasible,
-            PolytopeStatus::Error(err_msg) => {
-                error!("{}", err_msg);
-                NodeState::Indeterminate
-            }
-        }
-    }
-
-    /// Test if the edge from ``parent_idx`` to ``node_idx`` is feasible.
-    ///
-    /// ***Deprecated:*** use [`AffTree::infeasible_elimination`] to prune infeasible paths instead.
-    pub fn is_edge_feasible(&self, parent_idx: usize, node_idx: usize) -> bool {
-        // Edges from the root node are always feasible
-        if parent_idx == 0 {
-            return true;
-        }
-
-        let mut path = self.tree.path_to_node(parent_idx);
-
-        let label = self
-            .tree
-            .get_label(parent_idx, node_idx)
-            .expect("edge not contained in graph");
-        path.push((parent_idx, label));
-
-        // Calculate polytope representing the path
-        let poly = self.polyhedral_path_characterization(&path);
-
-        let node = self.tree.node_value(node_idx).unwrap();
-        match &node.state {
-            NodeState::Infeasible => return false,
-            NodeState::Feasible | NodeState::FeasibleWitness(_) => return true,
-            NodeState::Indeterminate => {}
-        }
-
-        // No cached solution found
-        // Check if solution from parent node solves linear program -> superset
-        let parent_node = self.tree.tree_node(parent_idx).unwrap();
-        match &parent_node.value.state {
-            NodeState::Infeasible => return false,
-            NodeState::FeasibleWitness(wit) => {
-                if wit.iter().any(|point| poly.contains(point)) {
-                    return true;
-                }
-            }
-            NodeState::Feasible | NodeState::Indeterminate => {}
-        }
-
-        // No existing solutions found, calculate a new solution based on polytope
-        debug!("Passing LP to solver: {poly:?}");
-        let status = poly.status();
-        debug!("Solver status {status:?}");
-
-        match status {
-            PolytopeStatus::Infeasible => false,
-            PolytopeStatus::Unbounded => {
-                warn!("Target function of LP is reported as unbounded, but it is constant.\nPolytope: {:?}", &poly);
-                true
-            }
-            PolytopeStatus::Optimal(_solution) => true,
-            PolytopeStatus::Error(err) => {
-                // Definitely not good when the LP solver fails, but it is recoverable.
-                // Therefore it would be wrong to panic.
-                warn!("Error occurred while solving the linear program for an infeasible path!\nSolver status: {:?}\nPolytope: {:?}", err, &poly);
-                true
-            }
-        }
-    }
-
-    fn polyhedral_path_characterization(&self, path: &Vec<(TreeIndex, Label)>) -> Polytope {
-        // Most expensive function outside of LP solver
-        let mut cache = self.polytope_cache.borrow_mut();
-        cache.clear();
-        cache.reserve(path.len());
-
-        for (idx, label) in path {
-            let aff_func_node = &self.tree.node_value(*idx).unwrap().aff;
-            // Flip for label 1 because >= becomes <=
-            let factor = match label {
-                1 => -1.0,
-                0 => 1.0,
-                _ => 0.0,
-            };
-
-            let poly_node =
-                Polytope::from_mats(&aff_func_node.mat * factor, &aff_func_node.bias * -factor);
-            cache.push(poly_node);
-        }
-        let in_dim = self.in_dim();
-
-        let poly = Polytope::intersection_n(in_dim, cache.as_slice());
-        cache.clear();
-        poly
     }
 }
 
@@ -1041,9 +625,9 @@ impl<const K: usize> fmt::Debug for AffTree<K> {
             }
 
             let state_str = match &node.value.state {
-                NodeState::Infeasible => format!("infeasible"),
-                NodeState::Indeterminate => format!("indeterminate"),
-                NodeState::Feasible => format!("feasible"),
+                NodeState::Infeasible => "infeasible".to_string(),
+                NodeState::Indeterminate => "indeterminate".to_string(),
+                NodeState::Feasible => "feasible".to_string(),
                 NodeState::FeasibleWitness(witnesses) => {
                     format!("feasible with {} witnesses", witnesses.len())
                 }
@@ -1058,18 +642,14 @@ impl<const K: usize> fmt::Debug for AffTree<K> {
 #[cfg(test)]
 mod tests {
 
-    use super::AffTree;
-    use crate::{
-        aff,
-        distill::schema,
-        linalg::affine::{AffFunc, PolyRepr, Polytope},
-        path, poly,
-        pwl::iter::PolyhedraIter,
-    };
+    use ndarray::{arr1, arr2, array};
 
-    use assertables::*;
-    use itertools::Itertools;
-    use ndarray::{arr1, arr2, array, Axis};
+    use super::*;
+    use crate::distill::schema;
+    use crate::linalg::affine::AffFunc;
+    use crate::pwl::iter::PolyhedraIter;
+    use crate::pwl::node::NodeState;
+    use crate::{aff, path, poly};
 
     fn init_logger() {
         use env_logger::Target;
@@ -1081,6 +661,40 @@ mod tests {
             .target(Target::Stdout)
             .filter_level(LevelFilter::Warn)
             .try_init();
+    }
+
+    #[test]
+    fn test_from_poly() {
+        let poly = poly!([[1, 0, -1], [0, 1, 0]] < [-2, 2]);
+        let dd = AffTree::<2>::from_poly(poly, aff!([0, 0, 0] + 1), Some(&aff!([0, 0, 0] + 2)));
+
+        assert_eq!(dd.evaluate(&arr1(&[1., 1., 4.])).unwrap(), arr1(&[1.]));
+        assert_eq!(dd.evaluate(&arr1(&[2., 1., 1.])).unwrap(), arr1(&[2.]));
+        assert_eq!(dd.evaluate(&arr1(&[-1., 4., 5.])).unwrap(), arr1(&[2.]));
+    }
+
+    #[test]
+    fn test_apply_func_at_node_keeps_cache() {
+        let mut dd = AffTree::from_aff(aff!(
+            [[1., 2., 3., 4.], [4., 2., 0., -2.], [1., 3., -5., -7.]] + [11., 13., 17.]
+        ));
+        dd.compose::<false>(&schema::ReLU(3));
+        dd.infeasible_elimination();
+
+        // check test assumption
+        let wit = match &dd.tree.node_value(path!(dd.tree, 0, 1, 1)).unwrap().state {
+            NodeState::FeasibleWitness(val) => val.clone(),
+            _ => panic!("Invalid state of test case"),
+        };
+
+        dd.apply_func_at_node(path!(dd.tree, 0, 1, 1), &aff!([1., -1., 1.] + -2.));
+
+        let wit2 = match &dd.tree.node_value(path!(dd.tree, 0, 1, 1)).unwrap().state {
+            NodeState::FeasibleWitness(val) => val,
+            _ => panic!("Apply_function_at modified the cache"),
+        };
+
+        assert_eq!(&wit, wit2);
     }
 
     #[test]
@@ -1158,76 +772,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compose() {
-        init_logger();
-
-        let mut tree0 = AffTree::<2>::from_aff(aff!([[1., 0.]] + [2.]));
-        tree0.add_child_node(0, 0, aff!([[2, 0], [0, 2]] + [1, 0]));
-        tree0.add_child_node(0, 1, aff!([[2, 0], [0, 2]] + [0, 1]));
-
-        let mut tree1 = AffTree::<2>::from_aff(aff!([[-0.5, 0.]] + [-1.]));
-        tree1.add_child_node(0, 0, aff!([[3, 0], [0, 3]] + [5, 0]));
-        tree1.add_child_node(0, 1, aff!([[-3, 0], [0, -3]] + [0, 5]));
-
-        let mut comp = tree0.clone();
-        comp.compose::<false>(&tree1);
-
-        assert_eq!(
-            comp.tree.node_value(path!(comp.tree, 0)).unwrap().aff,
-            aff!([-1, 0] + -1.5)
-        );
-
-        assert_eq!(
-            comp.tree.node_value(path!(comp.tree, 1, 1)).unwrap().aff,
-            aff!([[-6, 0], [0, -6]] + [0, 2])
-        );
-
-        assert_eq!(
-            tree1
-                .evaluate(&tree0.evaluate(&arr1(&[2., -7.])).unwrap())
-                .unwrap(),
-            comp.evaluate(&arr1(&[2., -7.])).unwrap()
-        );
-
-        assert_eq!(
-            tree1
-                .evaluate(&tree0.evaluate(&arr1(&[-1., -0.3])).unwrap())
-                .unwrap(),
-            comp.evaluate(&arr1(&[-1., -0.3])).unwrap()
-        );
-
-        assert_eq!(
-            tree1
-                .evaluate(&tree0.evaluate(&arr1(&[12., 3.])).unwrap())
-                .unwrap(),
-            comp.evaluate(&arr1(&[12., 3.])).unwrap()
-        );
-
-        // full binary tree 1 + 2 + 4
-        assert_eq!(comp.tree.len(), 7);
-    }
-
-    #[test]
-    fn test_compose_infeasible() {
-        init_logger();
-
-        let mut dd0 = AffTree::<2>::from_aff(aff!([[1., 0.]] + [2.]));
-        dd0.add_child_node(0, 0, aff!([[2, 0], [0, 2]] + [1, 0]));
-        dd0.add_child_node(0, 1, aff!([[2, 0], [0, 2]] + [0, 1]));
-
-        let mut dd1 = AffTree::<2>::from_aff(aff!([[-0.5, 0.]] + [-1.]));
-        dd1.add_child_node(0, 0, aff!([[3, 0], [0, 3]] + [5, 0]));
-        dd1.add_child_node(0, 1, aff!([[-3, 0], [0, -3]] + [0, 5]));
-
-        dd0.compose::<true>(&dd1);
-
-        // one node is infeasible and should be eliminated
-        assert_eq!(dd0.tree.len(), 6);
-        // dd1 should remain unchanged
-        assert_eq!(dd1.tree.len(), 3);
-    }
-
-    #[test]
     fn apply_function() {
         let dd = AffTree::<2>::from_aff(aff!([[2., -3.], [-7.5, 9.3]] + [-2., 4.]));
 
@@ -1287,23 +831,6 @@ mod tests {
     }
 
     #[test]
-    pub fn test_polyhedral_path_characterization() {
-        init_logger();
-
-        let tree = generic_tree(true);
-        let path = tree.tree.path_to_node(3);
-        let poly = tree.polyhedral_path_characterization(&path);
-
-        assert_eq!(
-            poly,
-            Polytope::new(AffFunc::from_mats(
-                arr2(&[[-0., -1., -0.], [0., 1., 0.]]),
-                arr1(&[2., -3.])
-            ))
-        );
-    }
-
-    #[test]
     pub fn test_polyhedra_iter_root() {
         init_logger();
 
@@ -1347,55 +874,6 @@ mod tests {
     }
 
     #[test]
-    pub fn test_is_edge_feasible() {
-        init_logger();
-
-        let tree = generic_tree(true);
-
-        assert!(tree.is_edge_feasible(0, 1));
-        assert!(tree.is_edge_feasible(0, 2));
-        assert!(!tree.is_edge_feasible(2, 3));
-        assert!(tree.is_edge_feasible(2, 4));
-    }
-
-    #[test]
-    pub fn test_infeasible_elimination() {
-        init_logger();
-
-        let mut tree = generic_tree(true);
-
-        tree.infeasible_elimination();
-
-        let nodes: Vec<usize> = tree.tree.node_iter().map(|(idx, _)| idx).collect();
-
-        assert_not_contains!(nodes, &2); // forwarding
-        assert_not_contains!(nodes, &3); // infeasible
-        assert!(tree.tree.tree_node(4).unwrap().isleaf);
-    }
-
-    #[test]
-    pub fn test_lift_affine_func() {
-        init_logger();
-
-        let tree1 = generic_tree(false);
-        let mut tree2 = AffTree::<2>::from_aff(aff!([[5., 1., 6.]] + [6.]));
-        add_leaf(&mut tree2, 0, 0, 7.);
-        add_leaf(&mut tree2, 0, 1, 2.);
-
-        let terminals = tree2.tree.terminal_indices().collect_vec();
-        AffTree::lift_func(
-            &tree1,
-            &mut tree2,
-            terminals,
-            |x, _| x.clone(),
-            |x, y| x.clone().add(y),
-            |tree, src, dest| tree.is_edge_feasible(src, dest),
-        );
-
-        assert_eq!(tree2.tree.len(), 11);
-    }
-
-    #[test]
     pub fn test_relu() {
         init_logger();
 
@@ -1415,174 +893,5 @@ mod tests {
             a.evaluate(&arr1(&[-1., -1., 1., -1.])).unwrap(),
             arr1(&[-1., -1., 1., -1.])
         );
-    }
-
-    #[test]
-    pub fn test_is_feasible() {
-        // Construct one path / polytope which has solutions in the upper quadrant
-
-        let mut dd = AffTree::<2>::from_aff(AffFunc::from_mats(arr2(&[[2., 1.]]), arr1(&[-1.])));
-
-        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5]));
-        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0]));
-        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.]));
-        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.]));
-        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.]));
-        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.]));
-        // feasible
-        dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.]));
-        // infeasible
-        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.]));
-
-        assert!(dd.is_edge_feasible(6, 7));
-        assert!(!dd.is_edge_feasible(6, 8));
-
-        assert_eq!(dd.evaluate(&arr1(&[6., 6.])).unwrap(), arr1(&[1.]));
-        assert_eq!(dd.evaluate(&arr1(&[4.5, 2.5])).unwrap(), arr1(&[1.]));
-
-        assert_eq!(
-            dd.tree.path_to_node(7),
-            &[(0, 1), (1, 1), (2, 1), (3, 1), (4, 0), (5, 1), (6, 0)]
-        );
-        assert_eq!(
-            dd.tree.path_to_node(8),
-            &[(0, 1), (1, 1), (2, 1), (3, 1), (4, 0), (5, 1), (6, 1)]
-        );
-
-        // Polytope uses Ax <= b while afftree uses Ax + b >= 0
-        let poly = Polytope::from_mats(
-            arr2(&[
-                [-2., -1.],
-                [-1., -2.],
-                [-0.5, -5.],
-                [-3., 1.],
-                [-1., -1.],
-                [1., -7.],
-                [-2., -0.2],
-            ]),
-            arr1(&[-1., -1.5, 1.0, 0., -6., 4., -3.]),
-        );
-
-        assert_eq!(
-            dd.polyhedral_path_characterization(&dd.tree.path_to_node(7)),
-            poly
-        );
-    }
-
-    #[test]
-    pub fn test_infeasible_elimination_feasible_path_2d() {
-        init_logger();
-        // Construct a polytope where every hyperplane is supportive (i.e., no hyperplane is redundant)
-        // Solutions are roughly contained inside [-4, 4] x [-1, 7]
-
-        let poly = poly!(
-            [
-                [1, 1],
-                [-1, -2],
-                [-2, -1],
-                [1, 5],
-                [7, 1],
-                [-2, -3],
-                [1, -3]
-            ] < [5, -2, 0.5, 30, 28, -4, 5]
-        );
-
-        let mut dd = AffTree::<2>::from_poly(poly, AffFunc::identity(2));
-
-        dd.infeasible_elimination();
-
-        // Each of the seven hyperplanes is required + one terminal
-        assert_eq!(dd.len(), 8);
-    }
-
-    #[test]
-    pub fn test_infeasible_elimination_feasible_path_6d() {
-        init_logger();
-        // Construct one path / polytope which has solutions in the upper quadrant
-
-        let poly = poly!(
-            [
-                [-2, -1, 1, 1, -1, 0],
-                [-1, -2, -1, -2, 0, -1],
-                [-0.5, -5, -2, -1, 1, 0],
-                [-3, 1, 1, 5, 0, 1],
-                [1, 1, 7, 1, -1, -1],
-                [1, 7, -2, -3, 1, 1],
-                [2, 0.2, 1, -3, -1, 1]
-            ] < [3, -4.5, 3.5, 34, 31, 6, 6]
-        );
-
-        let mut dd = AffTree::<2>::from_poly(poly, AffFunc::identity(6));
-
-        let idx = dd.add_child_node(
-            path!(dd.tree, 1, 1, 1, 1),
-            0,
-            poly!([[1, 1, 1, 1, 1, 1]] < [-20]).convert_to(PolyRepr::MatrixBiasGeqZero),
-        );
-        dd.add_child_node(idx, 0, AffFunc::constant(6, -1.0));
-        dd.add_child_node(idx, 1, AffFunc::constant(6, 1.0));
-
-        assert_eq!(dd.len(), 11);
-        assert_eq!(dd.num_terminals(), 3);
-
-        dd.infeasible_elimination();
-
-        // 7 conditions from poly + 1 terminal + 1 decision + 2 terminals
-        assert_eq!(dd.len(), 11);
-        assert_eq!(dd.num_terminals(), 3);
-    }
-
-    #[test]
-    pub fn test_infeasible_elimination_removes_node() {
-        init_logger();
-        // Construct one path / polytope which has solutions in the upper quadrant
-
-        let mut dd = AffTree::<2>::from_aff(AffFunc::from_mats(arr2(&[[2., 1.]]), arr1(&[-1.])));
-
-        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])); // 1
-        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])); // 2
-        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])); // 3
-        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])); // 4
-        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])); // 5
-        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])); // 6
-                                                             // feasible
-        dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.])); // 7
-                                                          // infeasible
-        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])); // 8
-
-        dd.infeasible_elimination();
-
-        let indices = dd.tree.node_indices().collect_vec();
-        // infeasible node removed
-        assert_not_contains!(indices, &8);
-        // redundant parent forwarded
-        assert_not_contains!(indices, &6);
-        assert_eq!(dd.len(), 7);
-    }
-
-    #[test]
-    fn test_mirror() {
-        let poly = poly!([[1, 0], [0, 1]] > [2, 3]);
-        let points = array![[-2.], [-7.]];
-
-        let sol = AffTree::<2>::mirror_points(&poly, &points, 2);
-
-        assert!(sol.is_some());
-        for point in sol.unwrap().axis_iter(Axis(1)) {
-            assert!(poly.contains(&point));
-        }
-    }
-
-    #[test]
-    fn test_mirror2() {
-        let poly = poly!([[1, 0], [0, 1], [1, 1], [2, 1], [-1, 1], [1, -1]] > [2, 3, 4, 2, -2, -4]);
-        let points = array![[-8., -20.], [-12., -1.]];
-
-        let sol = AffTree::<2>::mirror_points(&poly, &points, 5);
-
-        assert!(sol.is_some());
-        for point in sol.unwrap().axis_iter(Axis(1)) {
-            assert!(poly.contains(&point));
-        }
     }
 }
