@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -16,15 +16,15 @@
 
 use core::fmt;
 use std::fmt::Debug;
-use std::iter::{zip, Sum};
+use std::iter::{Sum, zip};
 use std::marker::PhantomData;
-use std::ops::{DivAssign, Mul, Neg};
+use std::ops::{BitAnd, DivAssign, Mul, Neg};
 
 use approx::{AbsDiffEq, RelativeEq};
-use itertools::{enumerate, Itertools};
+use itertools::{Itertools, enumerate};
 use ndarray::{
-    self, arr1, concatenate, s, stack, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Axis,
-    Data, DataMut, DataOwned, Ix1, Ix2, LinalgScalar, OwnedRepr, RawDataClone, ViewRepr, Zip,
+    self, Array1, Array2, ArrayBase, ArrayView1, ArrayView2, Axis, Data, DataMut, DataOwned, Ix1,
+    Ix2, LinalgScalar, OwnedRepr, RawDataClone, ViewRepr, Zip, arr1, concatenate, s, stack,
 };
 use num_traits::float::Float;
 
@@ -304,8 +304,14 @@ impl<A: Float> AffFuncG<A> {
 impl<A: Float> PolytopeG<A> {
     /// Creates a polytope that contains the complete `dim`-dimensional ambient space.
     #[inline(always)]
-    pub fn unrestricted(dim: usize) -> PolytopeG<A> {
+    pub fn unbounded(dim: usize) -> PolytopeG<A> {
         PolytopeG::<A>::from_mats(Array2::zeros((1, dim)), Array1::ones(1))
+    }
+
+    /// Creates a `dim`-dimensional polytope that contains no point of the ambient space.
+    #[inline(always)]
+    pub fn empty(dim: usize) -> PolytopeG<A> {
+        PolytopeG::<A>::from_mats(Array2::zeros((1, dim)), -Array1::ones(1))
     }
 
     /// Creates a polytope from a set of halfspaces described by ``normal_vectors`` and ``points`` in the plane (hesse normal form).
@@ -315,28 +321,66 @@ impl<A: Float> PolytopeG<A> {
         PolytopeG::<A>::from_mats(-normal_vectors, -bias)
     }
 
-    /// Creates a `dim`-dimensional hypercube centered at the origin.
-    /// In each dimension two hyperplanes are placed with distance +/- `radius` from the origin.
+    /// Creates a ``dim``-dimensional hypercube centered at the origin.
+    /// In each dimension two hyperplanes are placed with distance +/- ``radius`` from the origin.
     pub fn hypercube(dim: usize, radius: A) -> PolytopeG<A> {
         let mat: Array2<A> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
         let bias: Array1<A> = Array1::from_elem(2 * dim, radius);
         PolytopeG::<A>::from_mats(mat, bias)
     }
 
-    /// Creates a `dim`-dimensional hyperrectangle centered at the origin.
-    /// The distances from the origin to the faces of the rectangle are given by `intervals` in order of the axes.
-    pub fn hyperrectangle(dim: usize, intervals: &[(A, A)]) -> PolytopeG<A> {
-        let mat: Array2<A> = concatenate![Axis(0), Array2::eye(dim), -Array2::eye(dim)];
+    /// Creates a ``dim``-dimensional hyperrectangle centered at the origin.
+    /// The distances from the origin to the faces of the rectangle are given by ``intervals`` in order of the axes.
+    /// For interpretation of axis bounds see also [``Self::axis_bounds``].
+    pub fn hyperrectangle(intervals: &[(A, A)]) -> PolytopeG<A> {
+        let dim = intervals.len();
+        let mut mat: Array2<A> = Array2::zeros((2 * dim, dim));
         let mut bias: Array1<A> = Array1::zeros(2 * dim);
-        for idx in 0..dim {
-            bias[idx] = intervals[idx].1;
-            bias[idx + dim] = -intervals[idx].0;
+        for (idx, (lower, upper)) in intervals.iter().enumerate() {
+            Self::place_axis_bounds(2 * idx, &mut mat, &mut bias, idx, *lower, *upper);
         }
         PolytopeG::<A>::from_mats(mat, bias)
     }
 
-    /// Creates a polytope that restricts the value of the specified `axis` to be lower and upper bounded.
-    /// A value of `neg_inf` (resp. `inf`) results in no lower (resp. upper) bound being placed.
+    /// Creates a ``dim``-dimensional regular simplex with edge length sqrt(2) containing
+    /// the origin.
+    pub fn simplex(dim: usize) -> PolytopeG<A> {
+        let mut mat = Array2::ones((dim + 1, dim));
+        let bias = Array1::ones(dim + 1);
+
+        let dist = -(A::one() + (A::from(dim).unwrap() + A::one()).sqrt() + A::from(dim).unwrap());
+
+        for idx in 0..dim {
+            mat[[idx, idx]] = mat[[idx, idx]] + dist;
+        }
+
+        PolytopeG::<A>::from_mats(mat, bias)
+    }
+
+    /// Creates a ``dim``-dimensional cross polytope centered at the origin.
+    /// It generalizes the octahedron in that all its vertices are of the form
+    /// +/- e_i where e_i is the i-th unit vector.
+    pub fn cross_polytope(dim: usize) -> PolytopeG<A> {
+        let rows = usize::pow(2, dim as u32);
+
+        let mut mat = Array2::ones((rows, dim));
+        let bias = Array1::ones(rows);
+
+        for i in 0..rows {
+            for j in 0..dim {
+                if i.bitand(1 << j) != 0 {
+                    mat[[i, j]] = -A::one();
+                }
+            }
+        }
+
+        PolytopeG::<A>::from_mats(mat, bias)
+    }
+
+    /// Creates a polytope that restricts the value of the specified `axis` to be bounded by
+    /// the values of `lower_bound` and `upper_bound` (inclusive).
+    /// A value of `neg_inf` (resp. `inf`) results in an unbounded lower (resp. upper) bound.
+    /// The value of `lower_bound` must be less than or equal to `upper_bound`.
     #[inline(always)]
     pub fn axis_bounds(dim: usize, axis: usize, lower_bound: A, upper_bound: A) -> PolytopeG<A> {
         assert!(
@@ -346,13 +390,33 @@ impl<A: Float> PolytopeG<A> {
             dim
         );
 
-        assert!(lower_bound.is_finite() && upper_bound.is_finite());
-
         let mut mat = Array2::zeros((2, dim));
-        let bias = arr1(&[-lower_bound, upper_bound]);
-        mat[[0, axis]] = -A::one();
-        mat[[1, axis]] = A::one();
+        let mut bias = Array1::zeros(2);
+        Self::place_axis_bounds(0, &mut mat, &mut bias, axis, lower_bound, upper_bound);
         PolytopeG::<A>::from_mats(mat, bias)
+    }
+
+    fn place_axis_bounds<B: Float>(
+        idx: usize,
+        mat: &mut Array2<B>,
+        bias: &mut Array1<B>,
+        axis: usize,
+        lower: B,
+        upper: B,
+    ) {
+        assert!(lower <= upper);
+        if lower.is_infinite() {
+            bias[idx] = B::one();
+        } else {
+            mat[[idx, axis]] = -B::one();
+            bias[idx] = -lower;
+        }
+        if upper.is_infinite() {
+            bias[idx + 1] = B::one();
+        } else {
+            mat[[idx + 1, axis]] = B::one();
+            bias[idx + 1] = upper;
+        }
     }
 }
 
@@ -424,6 +488,44 @@ impl<I, D: Data<Elem = A>, A: Float> AffFuncBase<I, D> {
     //         })
     // }
 
+    /// Removes the rows given by ``indices``.
+    /// The iterator must return the rows to remove in ascending order.
+    pub fn remove_rows<Iter: IntoIterator<Item = usize>>(
+        &self,
+        indices: Iter,
+    ) -> AffFuncBase<I, OwnedRepr<A>> {
+        let mut indices = indices.into_iter();
+        let mut index = indices.next();
+
+        let rows = self
+            .mat
+            .axis_iter(Axis(0))
+            .zip(self.bias.iter())
+            .enumerate()
+            .filter(|(idx, _)| {
+                if let Some(val) = index {
+                    if *idx == val {
+                        index = indices.next();
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            })
+            .map(|(_, data)| data)
+            .collect_vec();
+
+        if index.is_some() {
+            panic!(
+                "iterator of indices for removal should have been completely consumed after checking each row"
+            );
+        }
+
+        AffFuncBase::<I, OwnedRepr<A>>::from_row_iter(self.indim(), rows.len(), rows)
+    }
+
     pub fn remove_zero_rows(&self) -> AffFuncBase<I, OwnedRepr<A>> {
         let rows = self
             .mat
@@ -457,14 +559,88 @@ impl<D: Data<Elem = A>, A: Float> AffFuncBase<PolytopeT, D> {
 }
 
 impl<I, A: Float + DivAssign + Sum> AffFuncBase<I, OwnedRepr<A>> {
-    /// Normalizes every row of this polytope with respect to Euclidean norm (l2).
+    /// Normalizes every row of this affine function / polytope with respect to Euclidean norm (l2).
     pub fn normalize(mut self) -> AffFuncBase<I, OwnedRepr<A>> {
         for (mut row, mut bias) in zip(self.mat.outer_iter_mut(), self.bias.outer_iter_mut()) {
             let norm: A = row.iter().map(|&x| x.powi(2)).sum::<A>().sqrt();
-            row.map_inplace(|x| *x /= norm);
-            bias.map_inplace(|x| *x /= norm);
+            if norm > A::epsilon() {
+                row.map_inplace(|x| *x /= norm);
+                bias.map_inplace(|x| *x /= norm);
+            }
         }
         self
+    }
+}
+
+impl<A: Float> AffFuncBase<PolytopeT, OwnedRepr<A>> {
+    /// Removes row constraints which are always satisfied on their own.
+    /// When a row constraint is encountered that is always false the
+    /// whole polytope is replaced by [``PolytopeG::empty()``].
+    pub fn remove_tautologies(&self) -> AffFuncBase<PolytopeT, OwnedRepr<A>> {
+        let rows: Option<Vec<_>> = self
+            .mat
+            .axis_iter(Axis(0))
+            .zip(self.bias.iter())
+            .filter_map(|(r, v)| {
+                if r.iter().all(|&x| x == A::zero()) {
+                    if *v >= A::zero() {
+                        // superfluous bound
+                        None
+                    } else {
+                        // infeasible
+                        Some(None)
+                    }
+                } else {
+                    Some(Some((r, v)))
+                }
+            })
+            .collect();
+
+        let rows = match rows {
+            Some(rows) => rows,
+            None => return PolytopeG::<A>::empty(self.indim()),
+        };
+
+        if rows.is_empty() {
+            Self::unbounded(self.indim())
+        } else {
+            PolytopeG::<A>::from_row_iter(self.indim(), rows.len(), rows)
+        }
+    }
+}
+
+impl<A: Float + DivAssign + Sum + RelativeEq<A, Epsilon: Clone>>
+    AffFuncBase<PolytopeT, OwnedRepr<A>>
+{
+    /// Removes all duplicate rows of this polytope from back to front.
+    /// Time complexity is O(n m^2) where n is the number of columns and m the
+    /// number of rows.
+    pub fn remove_duplicate_rows(&self) -> AffFuncBase<PolytopeT, OwnedRepr<A>> {
+        let normal = self.clone().normalize();
+
+        let mut dups: Vec<usize> = Vec::with_capacity(self.n_constraints());
+        for i in (0..self.n_constraints()).rev() {
+            for j in (0..i).rev() {
+                let mat_eq = ArrayView1::relative_eq(
+                    &normal.mat.row(i),
+                    &normal.mat.row(j),
+                    A::default_epsilon(),
+                    A::default_max_relative(),
+                );
+                let bias_eq = A::relative_eq(
+                    &normal.bias[i],
+                    &normal.bias[j],
+                    A::default_epsilon(),
+                    A::default_max_relative(),
+                );
+                if mat_eq && bias_eq {
+                    dups.push(i);
+                    break;
+                }
+            }
+        }
+
+        self.remove_rows(dups.into_iter().rev())
     }
 }
 
@@ -516,7 +692,7 @@ impl<D: Data<Elem = A>, A: Float + LinalgScalar + DivAssign + Sum> AffFuncBase<P
     ///
     /// Precisely, it returns a vector where each element is the distance from the given point to the hyperplane in order.
     /// Distance is positive if the point is inside the halfspace of that inequality and negative otherwise.
-    /// Returns f64::INFINITY if the corresponding halfspaces includes all points.
+    /// Returns f64::INFINITY if the corresponding halfspace includes all points.
     pub fn distance<S: Data<Elem = A>>(&self, point: &ArrayBase<S, Ix1>) -> Array1<A> {
         let mut raw_dist = self.distance_raw(point);
         for (row, mut dist) in zip(self.mat.outer_iter(), raw_dist.outer_iter_mut()) {
@@ -615,10 +791,8 @@ impl<D: Data<Elem = A>, A: Float + LinalgScalar> AffFuncBase<PolytopeT, D> {
     /// That is, the resulting polytope contains all points that are contained in each polytope of `polys`.
     #[rustfmt::skip]
     pub fn intersection_n(dim: usize, polys: &[AffFuncBase<PolytopeT, D>]) -> PolytopeG<A> {
-        //TODO: consider references: &[&Polytope]
-
         if polys.is_empty() {
-            return PolytopeG::<A>::unrestricted(dim);
+            return PolytopeG::<A>::unbounded(dim);
         }
 
         let mat_view: Vec<ArrayView2<A>> = polys.iter()
@@ -869,17 +1043,17 @@ impl<D: Data<Elem = A> + RawDataClone, A: Float> AffFuncBase<PolytopeT, D> {
         for (idx, row) in enumerate(self.mat.outer_iter()) {
             norm[[idx, 0]] = row.map(|x: &A| x.powi(2)).sum().sqrt();
         }
-        let amod = concatenate![Axis(1), self.mat, norm];
+        let mat = concatenate![Axis(1), self.mat, norm];
 
         // radius must be positive
-        let mut rad = Array2::<A>::zeros((1, amod.len_of(Axis(1))));
-        rad[[0, amod.len_of(Axis(1)) - 1]] = -A::one();
-        let amod = concatenate![Axis(0), amod, rad];
-        let bmod = concatenate![Axis(0), self.bias.clone(), Array1::<A>::zeros(1)];
+        let mut radius = Array2::<A>::zeros((1, mat.len_of(Axis(1))));
+        radius[[0, mat.len_of(Axis(1)) - 1]] = -A::one();
+        let mat = concatenate![Axis(0), mat, radius];
+        let bias = concatenate![Axis(0), self.bias.clone(), Array1::<A>::zeros(1)];
 
         (
-            PolytopeG::<A>::from_mats(amod, bmod),
-            Array1::from_iter(rad.iter().cloned()),
+            PolytopeG::<A>::from_mats(mat, bias),
+            Array1::from_iter(radius.iter().cloned()),
         )
     }
 }
@@ -1013,7 +1187,7 @@ macro_rules! poly {
 mod tests {
     use approx::assert_relative_eq;
     use itertools::Itertools;
-    use ndarray::{arr1, arr2, array, s, Array2, Axis};
+    use ndarray::{Array2, Axis, arr1, arr2, array, s};
 
     use super::*;
 
@@ -1178,6 +1352,15 @@ mod tests {
 
     #[test]
     pub fn test_remove_rows() {
+        let f = aff!([[1, 0, 2], [0, 3, -1], [2, 0.5, 0]] + [-7, 5, 1]);
+
+        let g = f.remove_rows(vec![0, 2]);
+
+        assert_eq!(g, aff!([[0, 3, -1]] + [5]));
+    }
+
+    #[test]
+    pub fn test_remove_zero_rows() {
         let f = aff!([[1, 0, 2], [0, 0, 0], [0, 0, 0]] + [0, 0, 1]);
 
         let g = f.remove_zero_rows();
@@ -1193,6 +1376,17 @@ mod tests {
         assert_eq!(
             f.normalize(),
             aff!([[1.0 / sqrt2, 0, -1.0 / sqrt2], [0, 1, 0]] + [2. / sqrt2, 5])
+        );
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    pub fn test_normalize_zero() {
+        let f = aff!([[0, 0, 0], [0, 1, 0]] + [2, 5]);
+
+        assert_eq!(
+            f.normalize(),
+            aff!([[0., 0, 0.], [0, 1, 0]] + [2, 5])
         );
     }
 
@@ -1241,31 +1435,62 @@ mod tests {
         let a = AffFunc::from_random(4, 3);
         let b = AffFunc::identity(4);
         let c = b.compose(&a);
-        assert!(c.indim() == 3);
-        assert!(c.outdim() == 4);
+        assert_eq!(c.indim(), 3);
+        assert_eq!(c.outdim(), 4);
     }
 
     /* Polytope Tests */
 
     #[test]
-    pub fn test_unrestricted() {
-        let poly = Polytope::unrestricted(4);
+    pub fn test_unbounded() {
+        let poly = Polytope::unbounded(4);
 
         assert_eq!(poly.indim(), 4);
-        //TODO
+        assert!(poly.contains(&arr1(&[1.5, 0.0, -2.3, 1.0])));
+        assert!(poly.contains(&arr1(&[1.0, 0.9, 0.2, 0.3])));
+        assert!(poly.contains(&arr1(&[2.0, -1.0, -7.6, 2.6])));
     }
 
     #[test]
     pub fn test_hyperrectangle() {
         let ival = [(1., 2.), (-1., 1.)];
 
-        let poly1 = Polytope::hyperrectangle(2, &ival);
-        let poly2 = Polytope::from_mats(
-            array![[1., 0.], [0., 1.], [-1., 0.], [0., -1.]],
-            array![2., 1., -1., 1.],
-        );
+        let poly = Polytope::hyperrectangle(&ival);
 
-        assert_eq!(poly1, poly2);
+        assert_eq!(poly.indim(), 2);
+        assert!(poly.contains(&arr1(&[1.5, 0.0])));
+        assert!(poly.contains(&arr1(&[1.0, 0.9])));
+        assert!(poly.contains(&arr1(&[2.0, -1.0])));
+        assert!(!poly.contains(&arr1(&[2.1, -0.2])));
+        assert!(!poly.contains(&arr1(&[3.5, 4.0])));
+        assert!(!poly.contains(&arr1(&[1.1, -2.0])));
+        assert!(!poly.contains(&arr1(&[1.8, 1.2])));
+    }
+
+    #[test]
+    pub fn test_simplex() {
+        let poly = Polytope::simplex(2);
+
+        assert_eq!(poly.indim(), 2);
+        assert!(poly.contains(&arr1(&[1.0, 0.0])));
+        assert!(poly.contains(&arr1(&[0.1, 0.9])));
+        assert!(poly.contains(&arr1(&[-0.3, -0.3])));
+        assert!(!poly.contains(&arr1(&[1.1, -0.2])));
+        assert!(!poly.contains(&arr1(&[-0.4, 0.1])));
+        assert!(!poly.contains(&arr1(&[-0.2, -0.5])));
+    }
+
+    #[test]
+    pub fn test_cross_polytope() {
+        let poly = Polytope::cross_polytope(2);
+
+        assert_eq!(poly.indim(), 2);
+        assert!(poly.contains(&arr1(&[1.0, 0.0])));
+        assert!(poly.contains(&arr1(&[0.1, 0.9])));
+        assert!(poly.contains(&arr1(&[-0.3, -0.3])));
+        assert!(!poly.contains(&arr1(&[-1.1, -0.2])));
+        assert!(!poly.contains(&arr1(&[-0.5, 0.6])));
+        assert!(!poly.contains(&arr1(&[-0.2, -1.5])));
     }
 
     #[test]
@@ -1298,6 +1523,99 @@ mod tests {
     }
 
     #[test]
+    pub fn test_remove_tautologies() {
+        let poly = poly!([[1, 0, -1], [0, 0, 0], [0, 1, 0]] < [2, 1, 5]);
+
+        assert_eq!(
+            poly.remove_tautologies(),
+            poly!([[1, 0, -1], [0, 1, 0]] < [2, 5])
+        );
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    pub fn test_remove_tautologies_zero() {
+        let poly = poly!([[1, 0, -1, 0], [0, 0, 0, 0]] < [-7, 0]);
+
+        assert_eq!(
+            poly.remove_tautologies(),
+            poly!([[1, 0, -1, 0]] < [-7])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_tautologies_all_zero() {
+        let poly = Polytope::from_mats(Array2::zeros((4, 10)), Array1::zeros(4));
+
+        assert_eq!(
+            poly.remove_tautologies(),
+            Polytope::from_mats(Array2::zeros((1, 10)), Array1::ones(1))
+        );
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    pub fn test_remove_tautologies_infeasible() {
+        let poly = poly!([[1, 0, -1], [0, 0, 0], [0, 1, 0]] < [2, -2, 5]);
+
+        assert_eq!(
+            poly.remove_tautologies(),
+            poly!([[0, 0, 0]] < [-1])
+        );
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    pub fn test_remove_tautologies_only() {
+        let poly = poly!([[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]] < [2, 7, 6]);
+
+        assert_eq!(
+            poly.remove_tautologies(),
+            poly!([[0, 0, 0, 0, 0]] < [1])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_duplicate_rows() {
+        let poly = poly!([[1, 0, -1], [0, 2, 0], [1, 0, -1]] < [2, -2, 2]);
+
+        assert_eq!(
+            poly.remove_duplicate_rows(),
+            poly!([[1, 0, -1], [0, 2, 0]] < [2, -2])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_duplicate_rows_scaled() {
+        let poly = poly!([[1, 0, -1], [-8, 2, 0], [1.5, 0, -1.5], [-4, 1, 0]] < [2, 10, 3, 5]);
+
+        assert_eq!(
+            poly.remove_duplicate_rows(),
+            poly!([[1, 0, -1], [-8, 2, 0]] < [2, 10])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_duplicate_rows_different_bias() {
+        let poly = poly!([[1, 0, -1], [0, 2, 0], [1, 0, -1]] < [2, -2, 3]);
+
+        assert_eq!(
+            poly.remove_duplicate_rows(),
+            poly!([[1, 0, -1], [0, 2, 0], [1, 0, -1]] < [2, -2, 3])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_duplicate_rows_close() {
+        let poly = poly!([[1, 0, -1], [0, 2, 0], [1, 0, -0.999]] < [2, -2, 2]);
+
+        assert_eq!(
+            poly.remove_duplicate_rows(),
+            poly!([[1, 0, -1], [0, 2, 0], [1, 0, -0.999]] < [2, -2, 2])
+        );
+    }
+
+    #[test]
     pub fn test_distance() {
         let poly = poly!([[2., 0., 0.]] < [2.]);
 
@@ -1307,8 +1625,8 @@ mod tests {
     }
 
     #[test]
-    pub fn test_distance_unrestricted() {
-        let poly = Polytope::unrestricted(4);
+    pub fn test_distance_unbounded() {
+        let poly = Polytope::unbounded(4);
 
         assert_eq!(
             poly.distance(&arr1(&[0., 1., 0., 0.])),

@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ use super::impl_composition::{CompositionSchema, NoOpVis};
 use crate::linalg::affine::*;
 use crate::tree::graph::*;
 
-/// Implementation of arithmetic and logic operators for AffTree
+// Implementation of arithmetic and logic operators for AffTree
 
 // Implementation of macros inspired by ndarray
 
@@ -145,13 +145,8 @@ macro_rules! impl_op_schema(
 
 impl_op_schema!(Add, add, AdditionSchema, "addition", "infeasible");
 impl_op_schema!(Sub, sub, SubtractionSchema, "subtraction", "infeasible");
-impl_op_schema!(
-    Mul,
-    mul,
-    MultiplicationSchema,
-    "multiplication",
-    "infeasible"
-);
+#[rustfmt::skip]
+impl_op_schema!(Mul, mul, MultiplicationSchema, "multiplication", "infeasible");
 impl_op_schema!(Div, div, DivisionSchema, "division", "infeasible");
 
 impl<const K: usize> AffTree<K> {
@@ -235,138 +230,142 @@ mod tests {
 
     #[test]
     fn test_add() {
-        let mut dd0 = AffTree::<2>::from_aff(aff!([1., -2.] + -1.));
-        dd0.compose::<false>(&schema::ReLU(1));
+        let mut dd0 = AffTree::<2>::from_aff(aff!([-1., 2.] + -1.));
+        dd0.compose::<false, false>(&schema::partial_ReLU(1, 0));
 
-        let mut dd1 = AffTree::<2>::from_aff(aff!([2., 1.] + 3.));
-        dd1.compose::<false>(&schema::ReLU(1));
+        let mut dd1 = AffTree::<2>::from_aff(aff!([-2., -1.] + 3.));
+        dd1.compose::<false, false>(&schema::partial_ReLU(1, 0));
 
         let dd = dd0 + dd1;
 
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 0, 0)).unwrap().aff,
+            dd.tree.node_value(path!(dd.tree, 1, 1)).unwrap().aff,
             aff!([0., 0.] + 0.)
         );
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 0, 1)).unwrap().aff,
-            aff!([2., 1.] + 3.)
-        );
-        assert_eq!(
             dd.tree.node_value(path!(dd.tree, 1, 0)).unwrap().aff,
-            aff!([1., -2.] + -1.)
+            aff!([-2., -1.] + 3.)
         );
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 1, 1)).unwrap().aff,
-            aff!([3., -1.] + 2.)
+            dd.tree.node_value(path!(dd.tree, 0, 1)).unwrap().aff,
+            aff!([-1., 2.] + -1.)
+        );
+        assert_eq!(
+            dd.tree.node_value(path!(dd.tree, 0, 0)).unwrap().aff,
+            aff!([-3., 1.] + 2.)
         );
     }
 
     #[test]
     fn test_add2() {
-        let mut dd0 = AffTree::<2>::from_aff(aff!([1., -2.] + -1.));
-        dd0.compose::<false>(&schema::ReLU(1));
+        let mut dd0 = AffTree::<2>::from_aff(aff!([-1., 2.] + -1.));
+        dd0.compose::<false, false>(&schema::partial_ReLU(1, 0));
 
-        let mut dd1 = AffTree::<2>::from_aff(aff!([2., 1.] + 3.));
-        dd1.compose::<false>(&schema::ReLU(1));
+        let mut dd1 = AffTree::<2>::from_aff(aff!([-2., -1.] + 3.));
+        dd1.compose::<false, false>(&schema::partial_ReLU(1, 0));
 
-        let dd3 = &dd0 + &dd1;
-        assert_ne!(dd3.len(), dd0.len());
+        // allocates new space
+        let dd2 = &dd0 + &dd1;
+        assert_ne!(dd2.len(), dd0.len());
 
-        let dd2 = dd0 + &dd1;
+        // moves dd0 and performs addition inplace
+        let dd3 = dd0 + &dd1;
         assert_eq!(dd3.len(), dd2.len());
     }
 
     #[test]
     fn test_sub() {
-        let mut dd0 = AffTree::<2>::from_aff(aff!([1., -2.] + -1.));
-        dd0.compose::<false>(&schema::ReLU(1));
+        let mut dd0 = AffTree::<2>::from_aff(aff!([-1., 2.] + -1.));
+        dd0.compose::<false, false>(&schema::partial_ReLU(1, 0));
 
-        let mut dd1 = AffTree::<2>::from_aff(aff!([2., 1.] + 3.));
-        dd1.compose::<false>(&schema::ReLU(1));
+        let mut dd1 = AffTree::<2>::from_aff(aff!([-2., -1.] + 3.));
+        dd1.compose::<false, false>(&schema::partial_ReLU(1, 0));
 
         let dd = dd0 - dd1;
 
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 0, 0)).unwrap().aff,
+            dd.tree.node_value(path!(dd.tree, 1, 1)).unwrap().aff,
             aff!([0., 0.] + 0.)
         );
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 0, 1)).unwrap().aff,
-            aff!([-2., -1.] + -3.)
-        );
-        assert_eq!(
             dd.tree.node_value(path!(dd.tree, 1, 0)).unwrap().aff,
-            aff!([1., -2.] + -1.)
+            aff!([2., 1.] + -3.)
         );
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 1, 1)).unwrap().aff,
-            aff!([-1., -3.] + -4.)
+            dd.tree.node_value(path!(dd.tree, 0, 1)).unwrap().aff,
+            aff!([-1., 2.] + -1.)
+        );
+        assert_eq!(
+            dd.tree.node_value(path!(dd.tree, 0, 0)).unwrap().aff,
+            aff!([1., 3.] + -4.)
         );
     }
 
     #[test]
     fn test_neg() {
-        let mut dd0 = AffTree::<2>::from_aff(aff!([1., -2.] + -1.));
-        dd0.compose::<false>(&schema::ReLU(1));
+        let mut dd0 = AffTree::<2>::from_aff(aff!([-1., 2.] + -1.));
+        dd0.compose::<false, false>(&schema::partial_ReLU(1, 0));
 
         let dd = -dd0;
 
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 0)).unwrap().aff,
+            dd.tree.node_value(path!(dd.tree, 1)).unwrap().aff,
             aff!([0., 0.] + 0.)
         );
         assert_eq!(
-            dd.tree.node_value(path!(dd.tree, 1)).unwrap().aff,
-            aff!([-1., 2.] + 1.)
+            dd.tree.node_value(path!(dd.tree, 0)).unwrap().aff,
+            aff!([1., -2.] + 1.)
         );
     }
 
     #[test]
     fn test_scalar_add() {
-        let mut dd = AffTree::<2>::from_aff(aff!([[1., -2.], [2., 1.]] + [-1., 3.]));
-        dd.compose::<false>(&schema::ReLU(2));
-        let f = aff!([[1., -1.], [2., -2.]] + [4., -4.]);
+        let mut dd = AffTree::<2>::from_aff(aff!([[-1., 2.], [-2., -1.]] + [-1., 3.]));
+        dd.compose::<false, false>(&schema::partial_ReLU(2, 0));
+        dd.compose::<false, false>(&schema::partial_ReLU(2, 1));
+        let f = aff!([[-1., 1.], [-2., 2.]] + [4., -4.]);
 
         let g = dd + &f;
 
-        assert_eq!(g.tree.node_value(path!(g.tree, 0, 0)).unwrap().aff, f);
-        assert_eq!(
-            g.tree.node_value(path!(g.tree, 0, 1)).unwrap().aff,
-            aff!([[1., -1.], [4., -1.]] + [4., -1.])
-        );
+        assert_eq!(g.tree.node_value(path!(g.tree, 1, 1)).unwrap().aff, f);
         assert_eq!(
             g.tree.node_value(path!(g.tree, 1, 0)).unwrap().aff,
-            aff!([[2., -3.], [2., -2.]] + [3., -4.])
+            aff!([[-1., 1.], [-4., 1.]] + [4., -1.])
         );
         assert_eq!(
-            g.tree.node_value(path!(g.tree, 1, 1)).unwrap().aff,
-            aff!([[2., -3.], [4., -1.]] + [3., -1.])
+            g.tree.node_value(path!(g.tree, 0, 1)).unwrap().aff,
+            aff!([[-2., 3.], [-2., 2.]] + [3., -4.])
+        );
+        assert_eq!(
+            g.tree.node_value(path!(g.tree, 0, 0)).unwrap().aff,
+            aff!([[-2., 3.], [-4., 1.]] + [3., -1.])
         );
     }
 
     #[test]
     fn test_scalar_sub() {
-        let mut dd = AffTree::<2>::from_aff(aff!([[2., -3.], [4., -1.]] + [-7., 2.]));
-        dd.compose::<false>(&schema::ReLU(2));
-        let f = aff!([[2., -2.], [5., -5.]] + [1., -1.]);
+        let mut dd = AffTree::<2>::from_aff(aff!([[-2., 3.], [-4., 1.]] + [-7., 2.]));
+        dd.compose::<false, false>(&schema::partial_ReLU(2, 0));
+        dd.compose::<false, false>(&schema::partial_ReLU(2, 1));
+        let f = aff!([[-2., 2.], [-5., 5.]] + [1., -1.]);
 
         let g = dd.clone() - &f;
 
         assert_eq!(
-            g.tree.node_value(path!(g.tree, 0, 0)).unwrap().aff,
-            aff!([[-2., 2.], [-5., 5.]] + [-1., 1.])
-        );
-        assert_eq!(
-            g.tree.node_value(path!(g.tree, 0, 1)).unwrap().aff,
-            aff!([[-2., 2.], [-1., 4.]] + [-1., 3.])
+            g.tree.node_value(path!(g.tree, 1, 1)).unwrap().aff,
+            aff!([[2., -2.], [5., -5.]] + [-1., 1.])
         );
         assert_eq!(
             g.tree.node_value(path!(g.tree, 1, 0)).unwrap().aff,
-            aff!([[0., -1.], [-5., 5.]] + [-8., 1.])
+            aff!([[2., -2.], [1., -4.]] + [-1., 3.])
         );
         assert_eq!(
-            g.tree.node_value(path!(g.tree, 1, 1)).unwrap().aff,
-            aff!([[0., -1.], [-1., 4.]] + [-8., 3.])
+            g.tree.node_value(path!(g.tree, 0, 1)).unwrap().aff,
+            aff!([[0., 1.], [5., -5.]] + [-8., 1.])
+        );
+        assert_eq!(
+            g.tree.node_value(path!(g.tree, 0, 0)).unwrap().aff,
+            aff!([[0., 1.], [1., -4.]] + [-8., 3.])
         );
 
         assert_eq!(
@@ -381,26 +380,28 @@ mod tests {
 
     #[test]
     fn test_scalar_sub_rev() {
-        let mut dd = AffTree::<2>::from_aff(aff!([[2., -3.], [4., -1.]] + [-7., 2.]));
-        dd.compose::<false>(&schema::ReLU(2));
-        let f = aff!([[2., -2.], [5., -5.]] + [1., -1.]);
+        let mut dd = AffTree::<2>::from_aff(aff!([[-2., 3.], [-4., 1.]] + [-7., 2.]));
+        dd.compose::<false, false>(&schema::partial_ReLU(2, 0));
+        dd.compose::<false, false>(&schema::partial_ReLU(2, 1));
+
+        let f = aff!([[-2., 2.], [-5., 5.]] + [1., -1.]);
         let g = &f - dd.clone();
 
         assert_eq!(
-            g.tree.node_value(path!(g.tree, 0, 0)).unwrap().aff,
-            aff!([[2., -2.], [5., -5.]] + [1., -1.])
-        );
-        assert_eq!(
-            g.tree.node_value(path!(g.tree, 0, 1)).unwrap().aff,
-            aff!([[2., -2.], [1., -4.]] + [1., -3.])
+            g.tree.node_value(path!(g.tree, 1, 1)).unwrap().aff,
+            aff!([[-2., 2.], [-5., 5.]] + [1., -1.])
         );
         assert_eq!(
             g.tree.node_value(path!(g.tree, 1, 0)).unwrap().aff,
-            aff!([[0., 1.], [5., -5.]] + [8., -1.])
+            aff!([[-2., 2.], [-1., 4.]] + [1., -3.])
         );
         assert_eq!(
-            g.tree.node_value(path!(g.tree, 1, 1)).unwrap().aff,
-            aff!([[0., 1.], [1., -4.]] + [8., -3.])
+            g.tree.node_value(path!(g.tree, 0, 1)).unwrap().aff,
+            aff!([[0., -1.], [-5., 5.]] + [8., -1.])
+        );
+        assert_eq!(
+            g.tree.node_value(path!(g.tree, 0, 0)).unwrap().aff,
+            aff!([[0., -1.], [-1., 4.]] + [8., -3.])
         );
 
         assert_eq!(

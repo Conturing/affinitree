@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -14,5 +14,6 @@
 
 //! Distillation of neural networks into decision trees
 
+pub mod arch;
 pub mod builder;
 pub mod schema;

@@ -3,7 +3,34 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+
+## [0.23.0] 2025-03-23
+
+### Added
+- Struct ``Architecture`` for modeling neural architectures, featuring automatic type checking and a convenient interface
+- Error types to ``AffTree`` and ``Tree``
+- Many methods of ``AffTree`` and ``Tree`` now return ``Result`` types with the new error variants
+- Statistics over the depth of terminals in Tree and AffTree
+- Methods ``empty``, ``simplex``, and ``cross_polytope`` for constructing new polytopes
+- Method ``remove_rows`` for AffFunc and Polytope 
+- Method ``Polytope::{remove_tautologies, remove_duplicate_rows, remove_redundant_row_constraints}`` for removing redundancies in the specification of polytopes
+- Cargo option ``strip`` when compiling to improve flamegraph profiling
+
+### Changed
+- Linear inequalities are now stored in the common format A x <= b (previously it was A x + b >= 0)
+- All generators in ``schema`` are updated to produce natural trees given the new format of inequalities
+- Method ``AffTree::compose`` has a new compile-time parameter controlling output verbosity
+- ``builders::read_layers`` delays errors with the name of files in an npz archive
+- Renamed ``Polytope::unrestricted`` to ``Polytope::unbounded``
+- Removed redundant parameter ``dim`` from ``Polytope::hyperrectangle``
+- Updated dependencies
+
+### Removed
+- Method ``schema::ReLU``, use ``schema::partial_ReLU`` instead
+- Method ``Tree::get_label``, instead use ``Tree::{parent(),child()}.label``
+- Method ``AffTree::apply_partial_relu_at_node``, instead use ``AffTree::compose`` and ``schema::partial_ReLU``
 
 
 ## [0.22.0] 2024-06-28
@@ -51,8 +78,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - Input dim of distillation now acts on precondition if one is supplied
-
-### Security
 
 
 ## [0.21.1] 2024-03-05

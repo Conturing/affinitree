@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ impl AffTree<2> {
         elements.reverse();
 
         for value in elements.into_iter() {
-            if let Some(node) = self.tree.tree_node(value.index) {
+            if let Ok(node) = self.tree.tree_node(value.index) {
                 // skip terminals
                 if node.children_iter().count() == 0 {
                     continue;
@@ -46,7 +46,7 @@ impl AffTree<2> {
 
                     if left.value.aff == right.value.aff {
                         self.tree.remove_child(value.index, 1);
-                        self.tree.merge_child_with_parent(value.index, 0);
+                        self.tree.merge_child_with_parent(value.index, 0).unwrap();
                     }
                 }
             }
@@ -68,16 +68,16 @@ mod tests {
     fn test_reduce() {
         let mut dd = AffTree::<2>::from_aff(AffFunc::from_mats(arr2(&[[2., 1.]]), arr1(&[-1.])));
 
-        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])); // 1
-        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])); // 2
-        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])); // 3
-        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])); // 4
-        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])); // 5
-        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])); // 6
+        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])).unwrap(); // 1
+        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])).unwrap(); // 2
+        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])).unwrap(); // 3
+        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])).unwrap(); // 4
+        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])).unwrap(); // 5
+        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])).unwrap(); // 6
         // feasible
-        dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.])); // 7
+        dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.])).unwrap(); // 7
         // infeasible
-        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])); // 8
+        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])).unwrap(); // 8
 
         dd.reduce();
 
@@ -88,19 +88,19 @@ mod tests {
     fn test_reduce2() {
         let mut dd = AffTree::<2>::from_aff(AffFunc::from_mats(arr2(&[[2., 1.]]), arr1(&[-1.])));
 
-        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])); // 1
-        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])); // 2
-        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])); // 3
-        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])); // 4
-        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])); // 5
-        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])); // 6
+        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])).unwrap(); // 1
+        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])).unwrap(); // 2
+        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])).unwrap(); // 3
+        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])).unwrap(); // 4
+        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])).unwrap(); // 5
+        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])).unwrap(); // 6
         // feasible
-        dd.add_child_node(6, 0, aff!([[0., 0.]] + [0.])); // 7
+        dd.add_child_node(6, 0, aff!([[0., 0.]] + [0.])).unwrap(); // 7
         // infeasible
-        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])); // 8
+        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])).unwrap(); // 8
 
-        dd.add_child_node(5, 0, aff!([[0., 0.]] + [0.])); // 9
-        dd.add_child_node(4, 1, aff!([[0., 0.]] + [0.]));
+        dd.add_child_node(5, 0, aff!([[0., 0.]] + [0.])).unwrap(); // 9
+        dd.add_child_node(4, 1, aff!([[0., 0.]] + [0.])).unwrap();
 
         dd.reduce();
 
@@ -116,19 +116,19 @@ mod tests {
     fn test_reduce3() {
         let mut dd = AffTree::<2>::from_aff(AffFunc::from_mats(arr2(&[[2., 1.]]), arr1(&[-1.])));
 
-        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])); // 1
-        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])); // 2
-        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])); // 3
-        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])); // 4
-        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])); // 5
-        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])); // 6
+        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])).unwrap(); // 1
+        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])).unwrap(); // 2
+        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])).unwrap(); // 3
+        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])).unwrap(); // 4
+        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])).unwrap(); // 5
+        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])).unwrap(); // 6
         // feasible
-        dd.add_child_node(6, 0, aff!([[0., 0.]] + [0.])); // 7
+        dd.add_child_node(6, 0, aff!([[0., 0.]] + [0.])).unwrap(); // 7
         // infeasible
-        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])); // 8
+        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])).unwrap(); // 8
 
-        dd.add_child_node(5, 0, aff!([[0., 0.]] + [1.]));
-        dd.add_child_node(4, 1, aff!([[0., 0.]] + [0.]));
+        dd.add_child_node(5, 0, aff!([[0., 0.]] + [1.])).unwrap();
+        dd.add_child_node(4, 1, aff!([[0., 0.]] + [0.])).unwrap();
 
         dd.reduce();
 

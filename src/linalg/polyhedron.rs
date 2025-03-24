@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ use std::iter::zip;
 
 #[cfg(feature = "highs")]
 use highs::{self, Col, HighsModelStatus, RowProblem, Sense, SolvedModel};
+use log::debug;
 #[cfg(feature = "minilp")]
 use minilp::{Problem, Variable};
 use ndarray::{self, Array1};
@@ -41,6 +42,43 @@ pub enum PolytopeStatus {
 
 /// # LP solving
 impl Polytope {
+    pub fn remove_redundant_row_constraints(&self) -> Result<Polytope, String> {
+        let mut redundant: Vec<usize> = Vec::with_capacity(self.n_constraints() / 2);
+        for idx in (0..self.n_constraints()).rev() {
+            debug!("Processing row {}", idx);
+
+            let mut indices = redundant.clone();
+            indices.push(idx);
+            let poly = self.remove_rows(indices.into_iter().rev());
+
+            let costs = self.mat.row(idx).to_owned();
+            let bound = self.bias[idx];
+
+            let status = poly.solve_linprog(-costs.clone(), false);
+
+            match status {
+                PolytopeStatus::Optimal(point) => {
+                    let val = costs.dot(&point);
+                    debug!(
+                        "Found optimal point {} with value {} !< {}",
+                        &point, val, bound
+                    );
+                    if val <= bound + f64::EPSILON {
+                        debug!("Constraint is redundant");
+                        redundant.push(idx);
+                    }
+                }
+                PolytopeStatus::Unbounded => {
+                    debug!("Constraint is necessary");
+                }
+                PolytopeStatus::Infeasible => return Ok(Polytope::empty(self.indim())),
+                PolytopeStatus::Error(msg) => return Err(msg),
+            }
+        }
+
+        Ok(self.remove_rows(redundant.into_iter().rev()))
+    }
+
     /// Tests if the polytope is feasible.
     #[inline]
     pub fn is_feasible(&self) -> bool {
@@ -59,8 +97,8 @@ impl Polytope {
 
     /// Solves a linear program built form this polytope and coeffs as target func.
     /// Concretely, the resulting linear program is
-    /// min coeffs.T x
-    /// s.t. mat x <= bias
+    /// min coeffs.T @ x
+    /// s.t. self.mat @ x <= self.bias
     #[cfg(feature = "minilp")]
     pub fn solve_linprog(&self, coeffs: Array1<f64>, _verbose: bool) -> PolytopeStatus {
         let problem = self.as_linprog(coeffs);
@@ -70,7 +108,11 @@ impl Polytope {
         match pb.solve() {
             Ok(sol) => {
                 let wit = Array1::from_iter(vars.iter().map(|var| sol[*var]));
-                PolytopeStatus::Optimal(wit)
+                if wit.iter().any(|x| x.is_infinite() || x.is_nan()) {
+                    PolytopeStatus::Unbounded
+                } else {
+                    PolytopeStatus::Optimal(wit)
+                }
             }
             Err(minilp::Error::Infeasible) => PolytopeStatus::Infeasible,
             Err(minilp::Error::Unbounded) => PolytopeStatus::Unbounded,
@@ -78,9 +120,9 @@ impl Polytope {
     }
 
     /// Solves a linear program built form this polytope and coeffs as target func.
-    /// Concretly, the resulting linear program is
-    /// min coeffs.T x
-    /// s.t. mat x <= bias
+    /// Concretely, the resulting linear program is
+    /// min coeffs.T @ x
+    /// s.t. self.mat @ x <= self.bias
     #[cfg(feature = "minilp")]
     pub fn as_linprog(&self, cost_function: Array1<f64>) -> LinearProgram {
         use minilp::{ComparisonOp, OptimizationDirection};
@@ -172,7 +214,6 @@ impl Polytope {
                 PolytopeStatus::Unbounded
             }
             HighsModelStatus::Optimal => {
-                //TODO optimize the conversion if necessary
                 let solution_vals = solved.get_solution();
                 let solution_f64 = Array1::from_iter(solution_vals.columns().iter().copied());
                 PolytopeStatus::Optimal(solution_f64)
@@ -184,9 +225,10 @@ impl Polytope {
 #[cfg(test)]
 mod tests {
     use approx::assert_relative_eq;
+    use assertables::*;
     #[cfg(feature = "highs")]
     use highs::{HighsModelStatus, RowProblem, Sense};
-    use ndarray::{arr1, arr2, array, s, Array1};
+    use ndarray::{Array1, arr1, arr2, array, s};
 
     use super::*;
     use crate::poly;
@@ -201,6 +243,43 @@ mod tests {
             .target(Target::Stdout)
             .filter_level(LevelFilter::Warn)
             .try_init();
+    }
+
+    pub fn assert_poly_feasible(poly: &Polytope) {
+        match poly.status() {
+            PolytopeStatus::Optimal(val) => {
+                if !poly.contains(&val) {
+                    panic!(
+                        "Polytope is correctly reported as feasible, but provided solution is not contained in polytope: distances {}",
+                        poly.distance(&val)
+                    );
+                }
+            }
+            PolytopeStatus::Infeasible => {
+                panic!("Polytope is incorrectly reported as infeasible")
+            }
+            PolytopeStatus::Unbounded => panic!("Polytope is reported as unbounded"),
+            PolytopeStatus::Error(msg) => {
+                panic!("Unknown error occurred while solving polytope: {}", msg)
+            }
+        }
+    }
+
+    pub fn assert_poly_infeasible(poly: &Polytope) {
+        match poly.status() {
+            PolytopeStatus::Optimal(val) => {
+                if poly.contains(&val) {
+                    panic!("Test case is incorrect");
+                } else {
+                    panic!("Polytope is incorrectly reported as feasible");
+                }
+            }
+            PolytopeStatus::Infeasible => {}
+            PolytopeStatus::Unbounded => panic!("Polytope is reported as unbounded"),
+            PolytopeStatus::Error(msg) => {
+                panic!("Unknown error occurred while solving polytope: {}", msg)
+            }
+        }
     }
 
     #[test]
@@ -221,7 +300,7 @@ mod tests {
         let poly = Polytope::from_mats(weights, bias);
 
         // Checked against scipy v1.11.4
-        assert!(poly.is_feasible());
+        assert_poly_feasible(&poly);
     }
 
     #[test]
@@ -242,7 +321,7 @@ mod tests {
         let poly = Polytope::from_mats(weights, bias);
 
         // Checked against scipy v1.11.4
-        assert!(!poly.is_feasible());
+        assert_poly_infeasible(&poly);
     }
 
     #[test]
@@ -308,7 +387,7 @@ mod tests {
         let poly = Polytope::from_mats(weights, bias);
 
         // Checked against scipy v1.11.4
-        assert!(!poly.is_feasible());
+        assert_poly_infeasible(&poly);
     }
 
     #[test]
@@ -332,7 +411,7 @@ mod tests {
         let poly = Polytope::from_mats(weights, bias);
 
         // Mathematically sound
-        assert!(!poly.is_feasible());
+        assert_poly_infeasible(&poly);
     }
 
     #[test]
@@ -359,7 +438,7 @@ mod tests {
 
         let poly = Polytope::from_mats(weights, bias);
         // Checked against scipy v1.11.4
-        assert!(poly.is_feasible());
+        assert_poly_feasible(&poly);
     }
 
     #[test]
@@ -389,11 +468,11 @@ mod tests {
             weights.slice(s![..10, ..]).to_owned(),
             bias.slice(s![..10]).to_owned(),
         );
-        assert!(poly.is_feasible());
+        assert_poly_feasible(&poly);
 
         let poly = Polytope::from_mats(weights, bias);
         // Checked against scipy v1.11.4 (highs failed)
-        assert!(!poly.is_feasible());
+        assert_poly_infeasible(&poly);
     }
 
     #[test]
@@ -423,7 +502,7 @@ mod tests {
             bias.slice(s![2..]).to_owned(),
         );
         // Checked against scipy v1.11.4
-        assert!(!poly.is_feasible());
+        assert_poly_infeasible(&poly);
     }
 
     #[test]
@@ -463,11 +542,11 @@ mod tests {
             weights.slice(s![..10, ..]).to_owned(),
             bias.slice(s![..10]).to_owned(),
         );
-        assert!(poly.is_feasible());
+        assert_poly_feasible(&poly);
 
         let poly = Polytope::from_mats(weights, bias);
         // Checked against scipy v1.11.4 (highs failed)
-        assert!(!poly.is_feasible());
+        assert_poly_infeasible(&poly);
     }
 
     #[test]
@@ -479,7 +558,7 @@ mod tests {
 
         let poly = Polytope::from_mats(weights, bias);
         // Mathematically sound
-        assert!(poly.is_feasible());
+        assert_poly_feasible(&poly);
     }
 
     #[cfg(feature = "highs")]
@@ -546,10 +625,7 @@ mod tests {
         );
 
         // Checked against scipy v1.11.4
-        assert!(matches!(
-            poly.solve_linprog(Array1::zeros(2), false),
-            PolytopeStatus::Optimal(_)
-        ));
+        assert_poly_feasible(&poly);
     }
 
     #[test]
@@ -567,10 +643,7 @@ mod tests {
         );
 
         // Checked against scipy v1.11.4
-        assert!(matches!(
-            poly.solve_linprog(Array1::zeros(2), false),
-            PolytopeStatus::Optimal(_)
-        ));
+        assert_poly_feasible(&poly);
     }
 
     #[test]
@@ -589,10 +662,7 @@ mod tests {
         );
 
         // Checked against scipy v1.11.4
-        assert!(matches!(
-            poly.solve_linprog(Array1::zeros(2), false),
-            PolytopeStatus::Optimal(_)
-        ));
+        assert_poly_feasible(&poly);
     }
 
     #[test]
@@ -655,7 +725,7 @@ mod tests {
 
         let poly = Polytope::from_mats(weights, bias);
         // Checked against scipy v1.11.4
-        assert!(!matches!(poly.status(), PolytopeStatus::Infeasible));
+        assert_poly_feasible(&poly);
     }
 
     #[test]
@@ -718,7 +788,7 @@ mod tests {
 
         let poly = Polytope::from_mats(weights, bias);
         // Checked against scipy v1.11.4
-        assert!(matches!(poly.status(), PolytopeStatus::Infeasible));
+        assert_poly_infeasible(&poly);
     }
 
     #[test]
@@ -802,15 +872,166 @@ mod tests {
 
         let poly = Polytope::from_mats(weights, bias);
         // Checked against scipy v1.11.4
-        assert!(matches!(poly.status(), PolytopeStatus::Infeasible));
+        assert_poly_infeasible(&poly);
+    }
+
+    #[test]
+    pub fn test_polytope_status_unbounded() {
+        init_logger();
+
+        let poly = poly!([[-1, 0], [0, -1]] < [-1, -1]);
+
+        let status = poly.solve_linprog(arr1(&[-1., -1.]), false);
+
+        // Mathematically sound
+        assert!(matches!(status, PolytopeStatus::Unbounded));
+    }
+
+    #[test]
+    pub fn test_polytope_status_unbounded2() {
+        init_logger();
+
+        let poly = poly!([[-1., 0.27], [1., 1.]] < [0.27, 1.]);
+
+        let status = poly.solve_linprog(arr1(&[-0.27, 1.]), false);
+
+        // Mathematically sound
+        assert!(matches!(status, PolytopeStatus::Unbounded));
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    pub fn test_remove_redundant_row_constraints_all_necessary_unbounded() {
+        init_logger();
+        
+        // unbounded polytope open in direction (1, 1)
+        let poly = poly!([[1, -3], [-4, 1], [-1, 1]] < [5, 10, 6]);
+
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly
+        );
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    pub fn test_remove_redundant_row_constraints_all_necessary_bounded() {
+        init_logger();
+
+        // bounded polytope with 5 vertices
+        let poly = poly!([[1, -3], [-4, 1], [-1, 1], [2, 3], [7, 1]] < [5, 10, 6, 28, 60]);
+
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly
+        );
+    }
+
+    #[test]
+    pub fn test_remove_redundant_row_constraints_redundant() {
+        init_logger();
+
+        // bounded polytope with 5 vertices
+        let poly =
+            poly!([[1, -3], [-4, 1], [-1, 1], [2, 3], [7, 1], [-2, -1]] < [5, 10, 6, 28, 60, -6]);
+
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly.remove_rows(vec![1])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_redundant_row_constraints_redundant_in_point() {
+        init_logger();
+
+        // bounded polytope with 4 vertices
+        let poly = poly!(
+            [
+                [1, -3],
+                [-4, 1],
+                [-1, 1],
+                [2, 3],
+                [7, 1],
+                [-2, -1],
+                [0.8, -1.2]
+            ] < [5, 10, 6, 28, 60, -6, 1.6]
+        );
+
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly.remove_rows(vec![0, 1, 4])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_redundant_row_constraints_duplicate_rows_different_bias() {
+        init_logger();
+
+        // unbounded polytope
+        let poly = poly!([[1, -3], [-4, 1], [1, -3]] < [2, 10, 7]);
+
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly.remove_rows(vec![2])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_redundant_row_constraints_duplicate_rows_same_bias() {
+        init_logger();
+
+        // unbounded polytope
+        let poly = poly!([[1, -3], [-4, 1], [1, -3]] < [2, 10, 2]);
+
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly.remove_rows(vec![2])
+        );
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    pub fn test_remove_redundant_row_constraints_parallel() {
+        init_logger();
+
+        let poly = Polytope::hypercube(4, 3.);
+
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly
+        );
+    }
+
+    #[test]
+    pub fn test_remove_redundant_row_constraints_dim2() {
+        init_logger();
+
+        let poly = Polytope::intersection(&Polytope::simplex(2), &Polytope::cross_polytope(2));
+
+        // all constraints from simplex and non from cross_polytope
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly.remove_rows(vec![3, 4, 5, 6])
+        );
+    }
+
+    #[test]
+    pub fn test_remove_redundant_row_constraints_dim4() {
+        init_logger();
+
+        let poly = Polytope::intersection(&Polytope::simplex(4), &Polytope::cross_polytope(4));
+
+        // all constraints from simplex and the last from cross_polytope
+        assert_eq!(
+            poly.remove_redundant_row_constraints().unwrap(),
+            poly.remove_rows(vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+        );
     }
 
     #[test]
     pub fn test_chebyshev_box() {
-        let poly = Polytope::from_mats(
-            array![[1., 0.], [-1., 0.], [0., 1.], [0., -1.]],
-            array![1., 1., 1., 1.],
-        );
+        let poly = Polytope::hypercube(2, 1.0);
 
         let (p, c) = poly.chebyshev_center();
 
@@ -831,10 +1052,7 @@ mod tests {
 
     #[test]
     pub fn test_chebyshev_box_2() {
-        let poly = Polytope::from_mats(
-            array![[1., 0.], [-1., 0.], [0., 1.], [0., -1.]],
-            array![2., 1., 1., 1.],
-        );
+        let poly = Polytope::hyperrectangle(&[(-2., 1.), (-1., 1.)]);
 
         let (p, c) = poly.chebyshev_center();
 
@@ -845,15 +1063,15 @@ mod tests {
             _ => panic!(),
         };
 
-        assert!(0.0 <= wit[0]);
-        assert!(wit[0] <= 1.0);
+        assert_le!(-1.0, wit[0]);
+        assert_le!(wit[0], 0.0);
         assert_eq!(wit[1], 0.0);
         assert_eq!(wit[2], 1.0);
     }
 
     #[test]
     pub fn test_chebyshev_triangle() {
-        let poly = Polytope::from_mats(array![[1., 1.], [-1., 1.], [0., -1.]], array![0., 0., 2.4]);
+        let poly = poly!([[1., 1.], [-1., 1.], [0., -1.], [0., 0.]] < [0., 0., 2.4, 2.]);
 
         let (p, c) = poly.chebyshev_center();
 
@@ -870,5 +1088,98 @@ mod tests {
             epsilon = 1e-08,
             max_relative = 1e-02
         );
+    }
+
+    #[test]
+    pub fn test_chebyshev_triangle_zero_row() {
+        let poly =
+            poly!([[0., 0.], [1., 1.], [-1., 1.], [0., -1.], [0., 0.]] < [0.5, 0., 0., 2.4, 2.]);
+
+        let (p, c) = poly.chebyshev_center();
+
+        let sol = p.solve_linprog(c, false);
+
+        let wit = match sol {
+            PolytopeStatus::Optimal(wit) => wit,
+            _ => panic!(),
+        };
+
+        assert_relative_eq!(
+            wit,
+            array![0., -1.414, 1.],
+            epsilon = 1e-08,
+            max_relative = 1e-02
+        );
+    }
+
+    #[test]
+    pub fn test_chebyshev_triangle_infeasible() {
+        let poly =
+            poly!([[0., 0.], [1., 1.], [-1., 1.], [0., -1.], [0., 0.]] < [-0.5, 0., 0., 2.4, 2.]);
+
+        let (p, c) = poly.chebyshev_center();
+
+        let sol = p.solve_linprog(c, false);
+
+        assert!(matches!(sol, PolytopeStatus::Infeasible));
+    }
+
+    #[test]
+    pub fn test_chebyshev_simplex() {
+        for dim in 2..50 {
+            let poly = Polytope::simplex(dim);
+
+            let (p, c) = poly.chebyshev_center();
+
+            let sol = p.solve_linprog(c, false);
+
+            let wit = match sol {
+                PolytopeStatus::Optimal(wit) => wit,
+                _ => panic!(),
+            };
+
+            let centroid =
+                ((dim as f64 + 1.) - f64::sqrt(dim as f64 + 1.)) / (dim as f64 * (dim as f64 + 1.));
+            let distance = f64::sqrt(1. / (dim as f64 * (dim as f64 + 1.)));
+
+            assert_relative_eq!(
+                wit.slice(s![..-1]),
+                Array1::from_elem(dim, centroid),
+                epsilon = 1e-08,
+                max_relative = 1e-02
+            );
+
+            assert_relative_eq!(wit[dim], distance, epsilon = 1e-08, max_relative = 1e-02);
+        }
+    }
+
+    #[test]
+    pub fn test_chebyshev_cross_polytope() {
+        for dim in 2..12 {
+            let poly = Polytope::cross_polytope(dim);
+
+            let (p, c) = poly.chebyshev_center();
+
+            let sol = p.solve_linprog(c, false);
+
+            let wit = match sol {
+                PolytopeStatus::Optimal(wit) => wit,
+                _ => panic!(),
+            };
+
+            assert_relative_eq!(
+                wit.slice(s![..-1]),
+                Array1::zeros(dim),
+                epsilon = 1e-08,
+                max_relative = 1e-02
+            );
+
+            assert_relative_eq!(
+                wit[dim],
+                1. / f64::sqrt(dim as f64),
+                epsilon = 1e-08,
+                max_relative = 1e-02
+            );
+        }
     }
 }

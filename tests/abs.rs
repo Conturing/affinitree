@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -27,23 +27,25 @@ mod tests {
     #[test]
     pub fn test_abs() {
         let mut dd =
-            AffTree::<2>::from_aff(poly!([[1, 1]] < [0]).convert_to(PolyRepr::MatrixBiasGeqZero)); // 0
+            AffTree::<2>::from_aff(poly!([[1, 1]] < [0]).convert_to(PolyRepr::MatrixLeqBias)); // 0
 
         dd.add_decision(
             0,
             0,
-            poly!([[-1, 1]] < [0]).convert_to(PolyRepr::MatrixBiasGeqZero),
-        ); // 1
+            poly!([[-1, 1]] < [0]).convert_to(PolyRepr::MatrixLeqBias),
+        )
+        .unwrap(); // 1
         dd.add_decision(
             0,
             1,
-            poly!([[-1, 1]] < [0]).convert_to(PolyRepr::MatrixBiasGeqZero),
-        ); // 2
+            poly!([[-1, 1]] < [0]).convert_to(PolyRepr::MatrixLeqBias),
+        )
+        .unwrap(); // 2
 
-        dd.add_terminal(1, 0, aff!([[0, 1]] + [0]));
-        dd.add_terminal(1, 1, aff!([[1, 0]] + [0]));
-        dd.add_terminal(2, 0, aff!([[-1, 0]] + [0]));
-        dd.add_terminal(2, 1, aff!([[0, -1]] + [0]));
+        dd.add_terminal(1, 0, aff!([[0, 1]] + [0])).unwrap();
+        dd.add_terminal(1, 1, aff!([[1, 0]] + [0])).unwrap();
+        dd.add_terminal(2, 0, aff!([[-1, 0]] + [0])).unwrap();
+        dd.add_terminal(2, 1, aff!([[0, -1]] + [0])).unwrap();
 
         assert_eq!(dd.len(), 7);
         assert_eq!(dd.num_terminals(), 4);

@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -427,8 +427,8 @@ where
 /// Generic implementation of the distillation process.
 ///
 /// The provided sequence of ``layers`` is mapped to equivalent
-/// ``AffTree`` instances based on [`schema`]. Then, this sequence is composed into a single
-/// ``AffTree`` using [`AffTree::compose`]. In between each composition
+/// [``AffTree``] instances based on [``crate::distill::schema``]. Then, this sequence is composed into a single
+/// [``AffTree``] using [`AffTree::compose`]. In between each composition
 /// step the tree is pruned using [`AffTree::infeasible_elimination`].
 ///
 /// Behavior can be customized by providing an appropriate ``visitor``.
@@ -487,26 +487,26 @@ where
                 dim = aff.outdim();
             }
             Layer::ReLU(row) => {
-                dd.compose::<false>(&partial_ReLU(dim, *row));
+                dd.compose::<false, false>(&partial_ReLU(dim, *row));
                 dd.infeasible_elimination();
             }
             Layer::LeakyReLU(row, alpha) => {
-                dd.compose::<false>(&partial_leaky_ReLU(dim, *row, *alpha));
+                dd.compose::<false, false>(&partial_leaky_ReLU(dim, *row, *alpha));
                 dd.infeasible_elimination();
             }
             Layer::HardTanh(row) => {
-                dd.compose::<false>(&partial_hard_tanh(dim, *row, -1., 1.));
+                dd.compose::<false, false>(&partial_hard_tanh(dim, *row, -1., 1.));
                 dd.infeasible_elimination();
             }
             Layer::HardSigmoid(row) => {
-                dd.compose::<false>(&partial_hard_sigmoid(dim, *row));
+                dd.compose::<false, false>(&partial_hard_sigmoid(dim, *row));
                 dd.infeasible_elimination();
             }
             Layer::Argmax => {
-                dd.compose::<true>(&argmax(dim));
+                dd.compose::<true, true>(&argmax(dim));
             }
             Layer::ClassChar(clazz) => {
-                dd.compose::<true>(&class_characterization(dim, *clazz));
+                dd.compose::<true, false>(&class_characterization(dim, *clazz));
             }
         }
         visitor.finish_layer(
@@ -528,7 +528,7 @@ where
 /// other formats such as "onnx".
 ///
 /// The underlying format from numpy is easy to use. It is described at
-/// https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html
+/// <https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html>
 pub fn read_layers<P: AsRef<Path>>(path: &P) -> Result<Vec<Layer>, ReadNpzError> {
     let file = File::open(path).map_err(ReadNpyError::from)?;
     let mut npz = NpzReader::new(file)?;
@@ -536,7 +536,7 @@ pub fn read_layers<P: AsRef<Path>>(path: &P) -> Result<Vec<Layer>, ReadNpzError>
     let mut names = npz.names()?;
     names.sort_unstable();
 
-    let pattern = Regex::new(r"^(\d+)\.(linear.weights|relu).npy$").unwrap();
+    let pattern = Regex::new(r"^(\d+)\.([A-Za-z._]*?)(\.npy)?$").unwrap();
 
     let mut layers = Vec::with_capacity(names.len());
     let mut dim: usize = 0;
@@ -578,7 +578,11 @@ pub fn read_layers<P: AsRef<Path>>(path: &P) -> Result<Vec<Layer>, ReadNpzError>
                 dim = aff.outdim();
                 layers.push(Layer::Linear(aff));
             }
-            _ => unreachable!(),
+            "linear.bias" => {}
+            "layers" => {}
+            other => {
+                panic!("Unknown layer type:\"{}\"", other);
+            }
         }
     }
 

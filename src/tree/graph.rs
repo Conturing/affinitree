@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -18,8 +18,9 @@ use core::fmt;
 use std::mem;
 use std::ops::{Index, IndexMut};
 
-use itertools::{enumerate, Itertools};
+use itertools::{Itertools, enumerate};
 use slab::Slab;
+use thiserror::Error;
 
 use super::iter::{DfsEdge, DfsPre, TraversalIter, TraversalMut};
 
@@ -75,17 +76,29 @@ pub struct NodeReference<'a, N> {
     pub idx: TreeIndex,
 }
 
+impl<N> NodeReference<'_, N> {
+    pub fn index(&self) -> TreeIndex {
+        self.idx
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct NodeReferenceMut<'a, N> {
     pub value: &'a mut N,
     pub idx: TreeIndex,
 }
 
+impl<N> NodeReferenceMut<'_, N> {
+    pub fn index(&self) -> TreeIndex {
+        self.idx
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Edge {
-    pub parent_idx: TreeIndex,
+    pub source_idx: TreeIndex,
     pub label: Label,
-    pub child_idx: TreeIndex,
+    pub target_idx: TreeIndex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,9 +123,9 @@ impl<'a, N> EdgeReference<'a, N> {
 
     pub fn edge(&self) -> Edge {
         Edge {
-            parent_idx: self.source_idx,
+            source_idx: self.source_idx,
             label: self.label,
-            child_idx: self.target_idx,
+            target_idx: self.target_idx,
         }
     }
 }
@@ -136,7 +149,43 @@ impl<'a, N> EdgeReferenceMut<'a, N> {
             self.target_value,
         )
     }
+
+    pub fn edge(&self) -> Edge {
+        Edge {
+            source_idx: self.source_idx,
+            label: self.label,
+            target_idx: self.target_idx,
+        }
+    }
 }
+
+#[derive(Error, Debug)]
+#[error("invalid index received: node {index:?} is not part of the graph")]
+pub struct InvalidTreeIndexError {
+    index: TreeIndex,
+}
+
+#[derive(Error, Debug)]
+pub enum NodeError {
+    #[error(transparent)]
+    InvalidIndex(#[from] InvalidTreeIndexError),
+    #[error("expected a child to exist for node {parent:?} with label {label:?}")]
+    MissingChild { parent: TreeIndex, label: Label },
+    #[error("expected node {index:?} to have a parent")]
+    MissingParent { index: TreeIndex },
+    #[error("cannot complete operation without overwriting existing node {index:?}")]
+    NodeExists { index: TreeIndex },
+    #[error(
+        "cannot complete operation without overwriting existing child of {parent:?} with label {label:?}"
+    )]
+    ChildExists { parent: TreeIndex, label: Label },
+    #[error("the requested operation is not permissable for the root node")]
+    RootNode,
+    #[error("no node found with the desired property")]
+    NodeNotFound,
+}
+
+// pub type Result<T> = core::result::Result<T, NodeError>;
 
 /// A tree implementation with constant branching factor ``K`` over an arena.
 ///
@@ -172,7 +221,7 @@ impl<N, const K: usize> Tree<N, K> {
     ///
     /// let mut dd: Tree<(), 2> = Tree::new();
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn new() -> Tree<N, K> {
         Self::with_capacity(0)
     }
@@ -206,7 +255,7 @@ impl<N, const K: usize> Tree<N, K> {
     }
 
     /// Constructs a new, single-node `Tree<N, K>` with the specified ``capacity`` and ``root`` node.
-    #[inline(always)]
+    #[inline]
     pub fn with_root(root: N, capacity: usize) -> Tree<N, K> {
         let mut tree = Self::with_capacity(capacity.max(1));
         tree.add_root(root);
@@ -214,25 +263,25 @@ impl<N, const K: usize> Tree<N, K> {
     }
 
     /// Returns the number of nodes in this tree.
-    #[inline(always)]
+    #[inline]
     pub fn len(&self) -> usize {
         self.arena.len()
     }
 
     /// Returns true if there are no values in this tree.
-    #[inline(always)]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.arena.is_empty()
     }
 
     /// Returns the number of terminal nodes in this tree
-    #[inline(always)]
+    #[inline]
     pub fn num_terminals(&self) -> usize {
         self.terminal_indices().count()
     }
 
     /// Returns the number of descendants of ``node`` (including ``node`` itself)
-    #[inline(always)]
+    #[inline]
     pub fn num_nodes(&self, node: TreeIndex) -> usize {
         DfsPre::iter(self, node).count()
     }
@@ -248,15 +297,47 @@ impl<N, const K: usize> Tree<N, K> {
             .unwrap_or(0)
     }
 
+    /// Returns statistics over the depth of this tree.
+    ///
+    /// Computes over the set of all terminal nodes the minimum, mean,
+    /// variance, and maximum of their depth.
+    #[rustfmt::skip]
+    pub fn depth_stats(&self) -> (f64, f64, f64, f64) {
+        use average::{Min, Max, Estimate, Variance};
+
+        let mut min = Min::new();
+        let mut max = Max::new();
+        let mut var = Variance::new();
+
+        for data in self.dfs_iter() {
+            if !self.is_leaf(data.index).unwrap_or(false) {
+                continue;
+            }
+            min.add(data.depth as f64);
+            max.add(data.depth as f64);
+            var.add(data.depth as f64);
+        }
+
+        (min.min(), var.mean(), var.sample_variance(), max.max())
+    }
+
     /// Returns the number of children the given ``node`` has.
     #[rustfmt::skip]
-    #[inline(always)]
+    #[inline]
     pub fn num_children(&self, node: TreeIndex) -> usize {
         self.arena[node]
             .children
             .iter()
             .filter(|&&x| x.is_some())
             .count()
+    }
+
+    /// Returns the number of nodes that can be added without reallocation.
+    ///
+    /// See also [`Slab::capacity`].
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.arena.capacity()
     }
 
     /// Reserves capacity for at least ``additional`` more nodes to be stored.
@@ -268,43 +349,65 @@ impl<N, const K: usize> Tree<N, K> {
     }
 
     /// Returns the value associated with the node at the given index.
-    #[inline(always)]
+    #[inline]
     #[rustfmt::skip]
-    pub fn node_value(&self, idx: TreeIndex) -> Option<&N> {
+    pub fn node_value(&self, idx: TreeIndex) -> Result<&N, InvalidTreeIndexError> {
         self.arena
             .get(idx)
             .map(|nd| &nd.value)
+            .ok_or(InvalidTreeIndexError { index: idx })
     }
 
     /// Returns the value associated with the node at the given index.
-    #[inline(always)]
+    #[inline]
     #[rustfmt::skip]
-    pub fn node_value_mut(&mut self, idx: TreeIndex) -> Option<&mut N> {
+    pub fn node_value_mut(&mut self, idx: TreeIndex) -> Result<&mut N, InvalidTreeIndexError> {
         self.arena
             .get_mut(idx)
             .map(|nd| &mut nd.value)
+            .ok_or(InvalidTreeIndexError { index: idx })
     }
 
-    /// Returns if the node at the given index has children or not.
+    /// Tests whether the node at the given index has children or not.
+    /// If the node does not exist, `Err` is returned.
+    #[rustfmt::skip]
+    pub fn is_leaf(&self, idx: TreeIndex) -> Result<bool, InvalidTreeIndexError> {
+        self.tree_node(idx)
+            .map(|nd| nd.isleaf)
+    }
+
+    /// Tests whether the node at the given index is the root of this tree.
     /// If the node does not exist, `None` is returned.
-    pub fn is_leaf(&self, idx: TreeIndex) -> Option<bool> {
-        self.tree_node(idx).map(|nd| nd.isleaf)
+    #[rustfmt::skip]
+    pub fn is_root(&self, idx: TreeIndex) -> bool {
+        if let Some(root_idx) = self.root {
+            root_idx == idx
+        } else {
+            false
+        }
     }
 
     /// Returns the internal structure used to store the node at the given index.
     ///
     /// **Use with caution**: Provides access to internal representation.
     #[inline(always)]
-    pub fn tree_node(&self, idx: TreeIndex) -> Option<&TreeNode<N, K>> {
-        self.arena.get(idx)
+    pub fn tree_node(&self, idx: TreeIndex) -> Result<&TreeNode<N, K>, InvalidTreeIndexError> {
+        self.arena
+            .get(idx)
+            .ok_or(InvalidTreeIndexError { index: idx })
     }
 
     /// Returns the internal structure used to store the node at the given index.
     ///
     /// **Use with caution**: Provides mutable access to internal representation.
     #[inline(always)]
-    pub fn tree_node_mut(&mut self, idx: TreeIndex) -> Option<&mut TreeNode<N, K>> {
-        self.arena.get_mut(idx)
+    pub fn tree_node_mut(
+        &mut self,
+        idx: TreeIndex,
+    ) -> Result<&mut TreeNode<N, K>, InvalidTreeIndexError> {
+        self.arena
+            .get_mut(idx)
+            .ok_or(InvalidTreeIndexError { index: idx })
     }
 
     /// Returns two mutable references to the values associated with the two
@@ -318,23 +421,31 @@ impl<N, const K: usize> Tree<N, K> {
         &mut self,
         idx1: TreeIndex,
         idx2: TreeIndex,
-    ) -> Option<(&mut TreeNode<N, K>, &mut TreeNode<N, K>)> {
-        self.arena.get2_mut(idx1, idx2)
+    ) -> Result<(&mut TreeNode<N, K>, &mut TreeNode<N, K>), InvalidTreeIndexError> {
+        if !self.arena.contains(idx1) {
+            Err(InvalidTreeIndexError { index: idx1 })
+        } else if !self.arena.contains(idx2) {
+            Err(InvalidTreeIndexError { index: idx2 })
+        } else {
+            Ok(self.arena.get2_mut(idx1, idx2).unwrap())
+        }
     }
 
     /// Returns the edge from the given node to its parent, if it exists. Otherwise `None` is returned.
     ///
     /// To find the corresponding label a linear search is performed in O(K).
     #[inline(always)]
-    pub fn parent(&self, node_idx: TreeIndex) -> Option<EdgeReference<'_, N>> {
+    pub fn parent(&self, node_idx: TreeIndex) -> Result<EdgeReference<'_, N>, NodeError> {
         let node = self.tree_node(node_idx)?;
-        let parent_idx = node.parent?;
+        let parent_idx = node
+            .parent
+            .ok_or(NodeError::MissingParent { index: node_idx })?;
         let parent = self.tree_node(parent_idx)?;
 
         for (label, child) in enumerate(&parent.children) {
             if let Some(child_idx) = child {
                 if *child_idx == node_idx {
-                    return Some(EdgeReference {
+                    return Ok(EdgeReference {
                         source_value: &parent.value,
                         source_idx: parent_idx,
                         label,
@@ -345,20 +456,26 @@ impl<N, const K: usize> Tree<N, K> {
             }
         }
 
-        None
+        panic!("data structure corrupted: the parent of a node should contain this node as a child")
     }
 
     /// Returns the edge from the given node to its parent, if it exists. Otherwise `None` is returned.
     #[inline(always)]
-    pub fn parent_mut(&mut self, node_idx: TreeIndex) -> Option<EdgeReferenceMut<'_, N>> {
-        let parent_idx = self.tree_node(node_idx)?.parent?;
+    pub fn parent_mut(
+        &mut self,
+        node_idx: TreeIndex,
+    ) -> Result<EdgeReferenceMut<'_, N>, NodeError> {
+        let parent_idx = self
+            .tree_node(node_idx)?
+            .parent
+            .ok_or(NodeError::MissingParent { index: node_idx })?;
 
         let (node, parent) = self.tree_node2_mut(node_idx, parent_idx)?;
 
         for (label, child) in enumerate(&parent.children) {
             if let Some(child_idx) = child {
                 if child_idx == &node_idx {
-                    return Some(EdgeReferenceMut {
+                    return Ok(EdgeReferenceMut {
                         source_value: &mut parent.value,
                         source_idx: parent_idx,
                         label,
@@ -369,17 +486,24 @@ impl<N, const K: usize> Tree<N, K> {
             }
         }
 
-        None
+        panic!("data structure corrupted: the parent of a node should contain this node as a child")
     }
 
     /// Returns the edge from the given node to the child reached with the given label, if it exists. Otherwise `None` is returned.
     #[inline(always)]
-    pub fn child(&self, node_idx: TreeIndex, label: Label) -> Option<EdgeReference<'_, N>> {
+    pub fn child(
+        &self,
+        node_idx: TreeIndex,
+        label: Label,
+    ) -> Result<EdgeReference<'_, N>, NodeError> {
         let node = self.tree_node(node_idx)?;
-        let child_idx = node.children[label]?;
+        let child_idx = node.children[label].ok_or(NodeError::MissingChild {
+            parent: node_idx,
+            label,
+        })?;
         let child = self.tree_node(child_idx)?;
 
-        Some(EdgeReference {
+        Ok(EdgeReference {
             source_value: &node.value,
             source_idx: node_idx,
             label,
@@ -394,12 +518,16 @@ impl<N, const K: usize> Tree<N, K> {
         &mut self,
         node_idx: TreeIndex,
         label: Label,
-    ) -> Option<EdgeReferenceMut<'_, N>> {
-        let child_idx = self.tree_node(node_idx)?.children[label]?;
+    ) -> Result<EdgeReferenceMut<'_, N>, NodeError> {
+        let child_idx =
+            self.tree_node(node_idx)?.children[label].ok_or(NodeError::MissingChild {
+                parent: node_idx,
+                label,
+            })?;
 
         let (node, child) = self.tree_node2_mut(node_idx, child_idx)?;
 
-        Some(EdgeReferenceMut {
+        Ok(EdgeReferenceMut {
             source_value: &mut node.value,
             source_idx: node_idx,
             label,
@@ -407,6 +535,8 @@ impl<N, const K: usize> Tree<N, K> {
             target_idx: child_idx,
         })
     }
+
+    // Iterators
 
     /// Iterates over the existing children of the given node. For each child, the edge connecting it to its parent is returned.
     ///
@@ -544,31 +674,7 @@ impl<N, const K: usize> Tree<N, K> {
     #[rustfmt::skip]
     pub fn edge_iter(&self) -> impl DoubleEndedIterator<Item = EdgeReference<'_, N>> {
         self.node_iter()
-            .filter_map(|(idx, _)| self.parent(idx))
-    }
-
-    /* Old utility methods, shouldn't be used in new code */
-
-    /// Return the label of the edge src_idx -> dest_idx if it exists.
-    /// Otherwise, return None.
-    pub fn get_label(&self, src_idx: TreeIndex, dest_idx: TreeIndex) -> Option<Label> {
-        let src_node = self.tree_node(src_idx)?;
-        let dest_node = self.tree_node(dest_idx)?;
-        let parent_idx = dest_node.parent?;
-
-        if parent_idx != src_idx {
-            return None;
-        }
-
-        for (label, child) in enumerate(&src_node.children) {
-            if let Some(child_idx) = child {
-                if child_idx == &dest_idx {
-                    return Some(label);
-                }
-            }
-        }
-
-        None
+            .filter_map(|(idx, _)| self.parent(idx).ok())
     }
 
     #[inline(always)]
@@ -587,7 +693,7 @@ impl<N, const K: usize> Tree<N, K> {
 
     /// Sets the given node as root of this tree, overwriting existing values.
     ///
-    /// If a root node already exists then the this operation disconnects the former tree, making it unreachable from the root.
+    /// If a root node already exists, then this operation disconnects the former tree, making it unreachable from the root.
     pub fn add_root(&mut self, value: N) -> TreeIndex {
         let idx = self.arena.insert(TreeNode::new(value, None));
         self.root = Some(idx);
@@ -600,24 +706,32 @@ impl<N, const K: usize> Tree<N, K> {
     /// # Panics
     ///
     /// Panics when ``parent`` already has a child with ``label``.
-    pub fn add_child_node(&mut self, parent: TreeIndex, label: Label, value: N) -> TreeIndex {
-        assert!(
-            self.arena.contains(parent),
-            "Cannot add child: parent node not contained in graph"
-        );
+    pub fn add_child_node(
+        &mut self,
+        parent: TreeIndex,
+        label: Label,
+        value: N,
+    ) -> Result<TreeIndex, NodeError> {
+        if !self.arena.contains(parent) {
+            return Err(NodeError::InvalidIndex(InvalidTreeIndexError {
+                index: parent,
+            }));
+        }
 
         let childnode = TreeNode::new(value, Some(parent));
         let node_idx = self.arena.insert(childnode);
 
-        let parent_node = self.tree_node_mut(parent).unwrap();
-        parent_node.isleaf = false;
-        assert!(
-            parent_node.children[label].is_none(),
-            "Overwriting existing node"
+        let parent_node = self.tree_node_mut(parent).expect(
+            "invalid state: tree node should be available when index is contained in arena",
         );
-        parent_node.children[label] = Some(node_idx);
+        parent_node.isleaf = false;
 
-        node_idx
+        if parent_node.children[label].is_some() {
+            Err(NodeError::ChildExists { parent, label })
+        } else {
+            parent_node.children[label] = Some(node_idx);
+            Ok(node_idx)
+        }
     }
 
     /// Tries to remove the node uniquely specified as the child of ``parent``
@@ -626,9 +740,9 @@ impl<N, const K: usize> Tree<N, K> {
     /// Otherwise, ``None`` is returned.
     ///
     /// Any descendants that are only reachable from the node are also removed.
-    pub fn try_remove_child(&mut self, parent: TreeIndex, label: Label) -> Option<N> {
+    pub fn try_remove_child(&mut self, parent: TreeIndex, label: Label) -> Result<N, NodeError> {
         let child_idx = self.child(parent, label)?.target_idx;
-        self.remove_all_descendants(child_idx);
+        self.remove_all_descendants(child_idx)?;
 
         self.arena[parent].children[label] = None;
 
@@ -636,7 +750,11 @@ impl<N, const K: usize> Tree<N, K> {
             self.arena[parent].isleaf = true;
         }
 
-        self.arena.try_remove(child_idx).map(|x| x.value)
+        Ok(self
+            .arena
+            .try_remove(child_idx)
+            .expect("data structure corrupted: the index of a child should be valid")
+            .value)
     }
 
     /// Removes the child from ``parent`` that is reachable by ``label``.
@@ -650,29 +768,44 @@ impl<N, const K: usize> Tree<N, K> {
     }
 
     /// Removes all descendants of ``subtree_root`` in this tree.
-    ///
-    /// # Panics
-    ///
-    /// Panics if ``subtree_root`` is not contained in this tree.
-    pub fn remove_all_descendants(&mut self, subtree_root: TreeIndex) {
+    /// Returns ``Ok`` on success with the number of deleted nodes or
+    /// ``Err`` if ``subtree_root`` is not contained in this tree.
+    pub fn remove_all_descendants(
+        &mut self,
+        subtree_root: TreeIndex,
+    ) -> Result<i32, InvalidTreeIndexError> {
+        if !self.arena.contains(subtree_root) {
+            return Err(InvalidTreeIndexError {
+                index: subtree_root,
+            });
+        }
+
         let mut stack = self
             .children(subtree_root)
             .map(|edg| edg.target_idx)
             .collect_vec();
 
+        let mut num_deleted = 0;
         while let Some(node_idx) = stack.pop() {
-            let current_node = self.tree_node(node_idx).unwrap();
+            let current_node = self
+                .tree_node(node_idx)
+                .expect("data structure corrupted: index stored in the tree should be valid");
             for child_idx in current_node.children.into_iter().flatten() {
                 stack.push(child_idx);
             }
             self.arena.remove(node_idx);
+            num_deleted += 1;
         }
 
-        let node = self.tree_node_mut(subtree_root).unwrap();
+        let node = self
+            .tree_node_mut(subtree_root)
+            .expect("invalid state: subtree root should still be contained in tree");
         node.isleaf = true;
         for child in &mut node.children {
             *child = None;
         }
+
+        Ok(num_deleted)
     }
 
     /// Skips ``parent_idx`` by creating a direct edge from the grandparent of ``parent_idx`` to its child reachable by ``label``.
@@ -680,37 +813,35 @@ impl<N, const K: usize> Tree<N, K> {
     ///
     /// This is a useful optimization when ``parent_idx`` is redundant.
     ///
-    /// # Panics
-    ///
-    /// Panics when ``parent_idx`` is not part of this tree or when it has no child reachable by ``label``.
+    /// Returns ``Err`` when ``parent_idx`` is not part of this tree or when it has no child reachable by ``label``.
     pub fn merge_child_with_parent(
         &mut self,
         parent_idx: TreeIndex,
         label: Label,
-    ) -> Option<TreeNode<N, K>> {
+    ) -> Result<TreeNode<N, K>, NodeError> {
         assert!(self.num_children(parent_idx) == 1);
         if let Some(root_idx) = self.root {
             if root_idx == parent_idx {
-                return None;
+                return Err(NodeError::RootNode);
             }
         }
-        let child_idx = self.arena[parent_idx].children[label].unwrap();
 
-        // Copy children to parent
-        let grandparent_idx = self.arena[parent_idx].parent.unwrap();
-        let grandparent_label = self.get_label(grandparent_idx, parent_idx).unwrap();
+        let child_idx = self.child(parent_idx, label)?.target_idx;
+        let edge = self.parent(parent_idx)?.edge();
+        let grandparent_idx = edge.source_idx;
+        let grandparent_label = edge.label;
 
         // Skip node
         self.arena[grandparent_idx].children[grandparent_label] = Some(child_idx);
         self.arena[child_idx].parent = Some(grandparent_idx);
 
-        self.arena.remove(parent_idx).into()
+        Ok(self.arena.remove(parent_idx))
     }
 
     /// Moves the given ``value`` into the node at ``idx``, returning its previous value.
-    pub fn update_node(&mut self, idx: TreeIndex, value: N) -> Option<N> {
+    pub fn update_node(&mut self, idx: TreeIndex, value: N) -> Result<N, NodeError> {
         let node = self.tree_node_mut(idx)?;
-        Some(mem::replace(&mut node.value, value))
+        Ok(mem::replace(&mut node.value, value))
     }
 
     /// Returns true if ``node_idx`` is a valid index for this tree.
@@ -722,33 +853,43 @@ impl<N, const K: usize> Tree<N, K> {
 
     /// Returns the unique sequence of nodes and labels that are encountered along the
     /// path from the root to ``node_idx``.
-    pub fn path_to_node(&self, node_idx: usize) -> Vec<(TreeIndex, Label)> {
-        assert!(
-            self.arena.contains(node_idx),
-            "Given node is not part of the tree"
-        );
+    pub fn path_to_node(&self, node_idx: usize) -> Result<Vec<(TreeIndex, Label)>, NodeError> {
+        if !self.arena.contains(node_idx) {
+            return Err(NodeError::InvalidIndex(InvalidTreeIndexError {
+                index: node_idx,
+            }));
+        }
         let mut current_node_idx = node_idx;
 
         let capacity = (self.len() as f64).log(K as f64).ceil() as usize;
         let mut path: Vec<(usize, usize)> = Vec::with_capacity(capacity);
 
-        while let Some(parent_idx) = self.tree_node(current_node_idx).unwrap().parent {
-            let edge_label = self.get_label(parent_idx, current_node_idx).unwrap();
-            path.push((parent_idx, edge_label));
-            current_node_idx = parent_idx;
+        loop {
+            let edge = match self.parent(current_node_idx) {
+                Ok(edge) => edge,
+                Err(NodeError::MissingParent { .. }) => break,
+                Err(other) => return Err(other),
+            };
+
+            path.push((edge.source_idx, edge.label));
+            current_node_idx = edge.source_idx;
         }
 
         path.reverse();
-        path
+        Ok(path)
     }
 
     /// Creates a short summary of the tree in form of a string.
     pub fn describe(&self) -> String {
+        let (min, mean, var, max) = self.depth_stats();
         format!(
-            "Tree {{ nodes={}, terminals={}, height={} }}",
+            "Tree {{ nodes={}, terminals={}, depth=[min={}, mean={:.2}, var={:.2}, max={}] }}",
             self.len(),
             self.num_terminals(),
-            self.depth()
+            min,
+            mean,
+            var,
+            max
         )
     }
 }
@@ -758,14 +899,14 @@ impl<N, const K: usize> Index<usize> for Tree<N, K> {
 
     fn index(&self, index: usize) -> &Self::Output {
         self.node_value(index)
-            .unwrap_or_else(|| panic!("No node exists with index {}", index))
+            .unwrap_or_else(|_| panic!("No node exists with index {}", index))
     }
 }
 
 impl<N, const K: usize> IndexMut<usize> for Tree<N, K> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         self.node_value_mut(index)
-            .unwrap_or_else(|| panic!("No node exists with index {}", index))
+            .unwrap_or_else(|_| panic!("No node exists with index {}", index))
     }
 }
 
@@ -816,9 +957,9 @@ where
 /// use affinitree::{path, tree::graph::{Tree}};
 /// let mut tree = Tree::<(), 2>::new();
 /// let z = tree.add_root(()); // 0
-/// let c0 = tree.add_child_node(z, 0, ()); // 1
-/// let c1 = tree.add_child_node(z, 1, ()); // 2
-/// let l0 = tree.add_child_node(c0, 0, ()); // 3
+/// let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+/// let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+/// let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
 ///
 /// assert_eq!(path!(tree, 1), 2);
 /// assert_eq!(path!(tree, 0, 0), 3);
@@ -849,13 +990,13 @@ mod tests {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()).unwrap(); // 7
 
         assert_eq!(tree.depth(), 3);
     }
@@ -865,13 +1006,13 @@ mod tests {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()).unwrap(); // 7
 
         tree.remove_child(0, 0);
 
@@ -888,13 +1029,13 @@ mod tests {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()).unwrap(); // 7
 
         let indices: Vec<usize> = tree.terminal_indices().collect();
         assert_eq!(&indices, &vec![3, 4, 5, 7]);
@@ -905,13 +1046,13 @@ mod tests {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()).unwrap(); // 7
 
         let indices: Vec<(TreeIndex, Label, TreeIndex)> = tree
             .edge_iter()
@@ -936,9 +1077,9 @@ mod tests {
         let mut tree = Tree::<i32, 2>::new();
 
         let z = tree.add_root(10); // 0
-        let c0 = tree.add_child_node(z, 0, 11); // 1
-        let c1 = tree.add_child_node(z, 1, 12); // 2
-        let l0 = tree.add_child_node(c0, 0, 13); // 3
+        let c0 = tree.add_child_node(z, 0, 11).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, 12).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, 13).unwrap(); // 3
 
         let edg = tree.parent_mut(3).unwrap();
 
@@ -956,13 +1097,13 @@ mod tests {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()).unwrap(); // 7
 
         tree.remove_child(z, 1);
         assert!(!tree.contains(c1));
@@ -977,15 +1118,15 @@ mod tests {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 0, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 0, ()).unwrap(); // 7
 
-        tree.merge_child_with_parent(r1, 0);
+        tree.merge_child_with_parent(r1, 0).unwrap();
 
         assert!(!tree.contains(r1));
         assert_eq!(tree.parent(rr1).unwrap().source_idx, c1);
@@ -1000,13 +1141,13 @@ mod tests {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()).unwrap(); // 7
 
         assert_eq!(path!(tree, 0, 1), 4);
         assert_eq!(path!(tree, 1, 1, 1), 7);

@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -17,12 +17,12 @@
 use std::fmt;
 
 use crate::linalg::affine::Polytope;
-use crate::linalg::impl_affineformat::{write_func, write_poly, FormatOptions};
+use crate::linalg::impl_affineformat::{FormatOptions, write_func, write_poly};
 use crate::pwl::afftree::AffTree;
 
 /// A formatter to convert [``AffTree``] instances to graphviz's DOT format.
 ///
-/// The DOT string can be accessed via the standard methods of the [``Display``] trait
+/// The DOT string can be accessed via the standard methods of the [``fmt::Display``] trait
 /// which are implemented for this class.
 #[derive(Debug, Clone)]
 pub struct Dot<'a> {
@@ -52,7 +52,7 @@ impl<'a> Dot<'a> {
     }
 }
 
-impl<'a> fmt::Display for Dot<'a> {
+impl fmt::Display for Dot<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -67,7 +67,7 @@ impl<'a> fmt::Display for Dot<'a> {
                 writeln!(f, "\", {}];", self.decision_attr)?;
             } else {
                 let poly = Polytope::from_mats(
-                    -node.value.aff.mat.to_owned(),
+                    node.value.aff.mat.to_owned(),
                     node.value.aff.bias.to_owned(),
                 );
                 write_poly(f, poly.view(), &self.decision_opt)?;
@@ -101,31 +101,32 @@ pub mod test {
 
     #[test]
     fn test_dot_str() {
-        let dd = schema::ReLU(2);
+        let mut dd = schema::partial_ReLU(2, 0);
+        dd.compose::<false, false>(&schema::partial_ReLU(2, 1));
 
-        let exp = "digraph afftree {\n\
+        let expected = "digraph afftree {\n\
             bgcolor=transparent;\n\
             concentrate=true;\n\
             margin=0;\n\
-            n0 [label=\"−1.00 $0 −0.00 $1 ≤ +0.00\", shape=ellipse];\n\
-            n1 [label=\"−0.00 $0 −1.00 $1 ≤ +0.00\", shape=ellipse];\n\
-            n2 [label=\"−0.00 $0 −1.00 $1 ≤ +0.00\", shape=ellipse];\n\
-            n3 [label=\"+0.00 \n\
+            n0 [label=\"+1.00 $0 +0.00 $1 ≤ +0.00\", shape=ellipse];\n\
+            n1 [label=\"+0.00 $0 +1.00 $1 ≤ +0.00\", shape=ellipse];\n\
+            n2 [label=\"+0.00 $0 +1.00 $1 ≤ +0.00\", shape=ellipse];\n\
+            n3 [label=\"+0.00 +1.00 $0 +0.00 $1\n\
             +0.00 +0.00 $0 +1.00 $1\", shape=box];\n\
-            n4 [label=\"+0.00 \n\
+            n4 [label=\"+0.00 +1.00 $0 +0.00 $1\n\
             +0.00 \", shape=box];\n\
-            n5 [label=\"+0.00 +1.00 $0 +0.00 $1\n\
+            n5 [label=\"+0.00 \n\
             +0.00 +0.00 $0 +1.00 $1\", shape=box];\n\
-            n6 [label=\"+0.00 +1.00 $0 +0.00 $1\n\
+            n6 [label=\"+0.00 \n\
             +0.00 \", shape=box];\n\
-            n0 -> n1 [label=1, style=solid];\n\
-            n0 -> n2 [label=0, style=dashed];\n\
-            n2 -> n3 [label=1, style=solid];\n\
-            n2 -> n4 [label=0, style=dashed];\n\
-            n1 -> n5 [label=1, style=solid];\n\
-            n1 -> n6 [label=0, style=dashed];\n}";
+            n0 -> n1 [label=0, style=dashed];\n\
+            n0 -> n2 [label=1, style=solid];\n\
+            n1 -> n3 [label=0, style=dashed];\n\
+            n1 -> n4 [label=1, style=solid];\n\
+            n2 -> n5 [label=0, style=dashed];\n\
+            n2 -> n6 [label=1, style=solid];\n}";
 
         let actual = format!("{}", Dot::from(&dd));
-        assert_eq!(actual, exp);
+        assert_eq!(actual, expected);
     }
 }

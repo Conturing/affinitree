@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -23,12 +23,12 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use affinitree::distill::builder::{afftree_from_layers, read_layers, Layer};
+    use affinitree::distill::builder::{Layer, afftree_from_layers, read_layers};
     use approx::assert_relative_eq;
     use itertools::Itertools;
     use ndarray::{Array, Array1};
-    use ndarray_rand::rand_distr::Normal;
     use ndarray_rand::RandomExt;
+    use ndarray_rand::rand_distr::Normal;
 
     pub fn eval_layers(layers: &[Layer], input: &Array1<f64>) -> Array1<f64> {
         let mut val = input.to_owned();

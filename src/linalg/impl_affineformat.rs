@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 use core::fmt;
 use core::iter::zip;
-use std::fmt::{Debug, Display, Write};
+use std::fmt::{Debug, Display};
 use std::ops::{Bound, RangeBounds};
 
 use itertools::Itertools;
@@ -57,27 +57,37 @@ impl FormatOptions {
     pub fn default_func() -> FormatOptions {
         FormatOptions {
             sort_coefficients: 0,
+            simplify_zero: true,
+            simplify_tautologies: false,
+            normalize: false,
             skip_axes_n: 0,
             skip_axes: (std::ops::Bound::Included(20), std::ops::Bound::Unbounded),
             skip_rows_n: 0,
             skip_rows: (std::ops::Bound::Included(5), std::ops::Bound::Unbounded),
-            simplify_tautologies: false,
-            simplify_zero: true,
-            normalize: false,
         }
     }
 
     pub fn default_poly() -> FormatOptions {
         FormatOptions {
             sort_coefficients: 5,
+            simplify_zero: false,
+            simplify_tautologies: true,
+            normalize: true,
             skip_axes_n: 0,
             skip_axes: (std::ops::Bound::Included(20), std::ops::Bound::Unbounded),
             skip_rows_n: 0,
             skip_rows: (std::ops::Bound::Included(5), std::ops::Bound::Unbounded),
-            simplify_tautologies: true,
-            simplify_zero: false,
-            normalize: true,
         }
+    }
+
+    pub fn show_all_rows(mut self) -> Self {
+        self.skip_rows = (std::ops::Bound::Included(1), std::ops::Bound::Excluded(0));
+        self
+    }
+
+    pub fn show_all_axes(mut self) -> Self {
+        self.skip_axes = (std::ops::Bound::Included(1), std::ops::Bound::Excluded(0));
+        self
     }
 }
 
@@ -136,19 +146,19 @@ impl<'a, T> AffFuncBasePrinter<'a, T> {
     }
 }
 
-impl<'a> Display for AffFuncBasePrinter<'a, FunctionT> {
+impl Display for AffFuncBasePrinter<'_, FunctionT> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write_func(f, self.instance.clone(), &self.options)
     }
 }
 
-impl<'a> Display for AffFuncBasePrinter<'a, PolytopeT> {
+impl Display for AffFuncBasePrinter<'_, PolytopeT> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write_poly(f, self.instance.clone(), &self.options)
     }
 }
 
-impl<'a, T> Debug for AffFuncBasePrinter<'a, T> {
+impl<T> Debug for AffFuncBasePrinter<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         Debug::fmt(&self.instance, f)
     }
@@ -162,7 +172,7 @@ pub fn write_poly(
     options: &FormatOptions,
 ) -> std::fmt::Result {
     let mut first_skip = true;
-    for (no, (row, bias)) in zip(
+    for (no, (row, (pos, bias))) in zip(
         pred.matrix_view().outer_iter(),
         pred.bias_view().iter().with_position(),
     )
@@ -176,10 +186,10 @@ pub fn write_poly(
             continue;
         }
 
-        write_inequality(f, row, *bias.into_inner(), options)?;
+        write_inequality(f, row, *bias, options)?;
 
-        match bias {
-            First(_) | Middle(_) => writeln!(f)?,
+        match pos {
+            First | Middle => writeln!(f)?,
             _ => {}
         }
     }
@@ -192,7 +202,7 @@ pub fn write_func(
     options: &FormatOptions,
 ) -> std::fmt::Result {
     let mut first_skip = true;
-    for (no, (row, bias)) in zip(
+    for (no, (row, (pos, bias))) in zip(
         func.matrix_view().outer_iter(),
         func.bias_view().iter().with_position(),
     )
@@ -206,10 +216,10 @@ pub fn write_func(
             continue;
         }
 
-        write_affcomb(f, row, *bias.into_inner(), options)?;
+        write_affcomb(f, row, *bias, options)?;
 
-        match bias {
-            First(_) | Middle(_) => writeln!(f)?,
+        match pos {
+            First | Middle => writeln!(f)?,
             _ => {}
         }
     }
@@ -276,7 +286,7 @@ pub fn write_lincomb(
 
     let mut first_skip = true;
 
-    for (no, position) in elements.into_iter().with_position().enumerate() {
+    for (no, (pos, (idx, coeff))) in elements.into_iter().with_position().enumerate() {
         if options.skip_axes.contains(&(no as i32)) {
             if first_skip {
                 write!(f, " {}", ELLIPSIS)?;
@@ -285,10 +295,9 @@ pub fn write_lincomb(
             continue;
         }
 
-        let (idx, coeff) = position.into_inner();
-        match position {
-            First(_) | Only(_) => {}
-            Middle(_) | Last(_) => {
+        match pos {
+            First | Only => {}
+            Middle | Last => {
                 write!(f, " ")?;
             }
         }
@@ -311,7 +320,7 @@ pub fn write_float(f: &mut fmt::Formatter, value: f64) -> std::fmt::Result {
 
 #[cfg(test)]
 mod tests {
-    use ndarray::{arr1, Array1, Array2};
+    use ndarray::{Array1, Array2, arr1};
 
     use super::*;
     use crate::linalg::affine::Polytope;

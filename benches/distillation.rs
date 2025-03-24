@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -16,10 +16,10 @@ use std::path::Path;
 
 use affinitree::aff;
 use affinitree::distill::builder::{afftree_from_layers, read_layers};
-use affinitree::distill::schema::{self, ReLU};
+use affinitree::distill::schema;
 use affinitree::linalg::affine::{AffFunc, Polytope};
 use affinitree::pwl::afftree::AffTree;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use ndarray::{arr1, arr2};
 
 pub fn dd_apply_function(c: &mut Criterion) {
@@ -73,16 +73,16 @@ pub fn dd_is_feasible(c: &mut Criterion) {
 
     let mut dd = AffTree::<2>::from_aff(aff!([[2., 1.]] + [-1.]));
 
-    dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5]));
-    dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0]));
-    dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.]));
-    dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.]));
-    dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.]));
-    dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.]));
+    dd.add_child_node(0, 1, aff!([[1., 2.]] + [-1.5])).unwrap();
+    dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [1.0])).unwrap();
+    dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.])).unwrap();
+    dd.add_child_node(3, 1, aff!([[-1., -1.]] + [6.])).unwrap();
+    dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.])).unwrap();
+    dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [3.])).unwrap();
     // feasible
-    dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.]));
+    dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.])).unwrap();
     // infeasible
-    dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.]));
+    dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])).unwrap();
 
     group.bench_function("is_edge_feasible (calc)", |b| {
         b.iter(|| dd.clone().is_edge_feasible(black_box(6), black_box(8)))
@@ -98,13 +98,16 @@ pub fn dd_is_feasible(c: &mut Criterion) {
 #[inline]
 fn default_dd(h: AffFunc, dim: usize, depth: i32) -> AffTree<2> {
     assert!(depth > 0);
-    let relu_dd = ReLU(dim);
+    let mut relu_dd = schema::partial_ReLU(4, 0);
+    for i in 1..dim {
+        relu_dd.compose::<false, false>(&schema::partial_ReLU(4, i));
+    }
     let mut dd = AffTree::<2>::from_aff(h.clone());
     for _ in 0..depth {
-        dd.compose::<true>(&relu_dd);
+        dd.compose::<true, false>(&relu_dd);
         dd.apply_func(&h);
     }
-    dd.compose::<true>(&relu_dd);
+    dd.compose::<true, false>(&relu_dd);
     dd
 }
 
@@ -165,7 +168,7 @@ pub fn ecoli_argmax_benchmark(c: &mut Criterion) {
     let dd = afftree_from_layers(7, &layers, None);
     let argmax = schema::argmax(4);
     group.bench_function("ecoli argmax", |b| {
-        b.iter(|| dd.clone().compose::<true>(&argmax))
+        b.iter(|| dd.clone().compose::<true, false>(&argmax))
     });
 }
 
@@ -175,9 +178,12 @@ pub fn ecoli_relu_benchmark(c: &mut Criterion) {
 
     let layers = read_layers(&"res/nn/ecoli.npz").unwrap();
     let dd = afftree_from_layers(7, &layers, None);
-    let relu = schema::ReLU(4);
+    let mut relu = schema::partial_ReLU(4, 0);
+    relu.compose::<false, false>(&schema::partial_ReLU(4, 1));
+    relu.compose::<false, false>(&schema::partial_ReLU(4, 2));
+    relu.compose::<false, false>(&schema::partial_ReLU(4, 3));
     group.bench_function("ecoli relu", |b| {
-        b.iter(|| dd.clone().compose::<true>(&relu))
+        b.iter(|| dd.clone().compose::<true, false>(&relu))
     });
 }
 
@@ -192,7 +198,7 @@ pub fn compose_benchmark(c: &mut Criterion) {
     let dd = default_dd(h.clone(), 3, 4);
     let dd2 = default_dd(h, 3, 4);
     group.bench_function("compose bench", |b| {
-        b.iter(|| dd.clone().compose::<true>(&dd2))
+        b.iter(|| dd.clone().compose::<true, false>(&dd2))
     });
 }
 
@@ -201,7 +207,7 @@ pub fn infeasible_benchmark(c: &mut Criterion) {
     group.sample_size(10);
 
     let poly = Polytope::hypercube(60, 0.03);
-    let precondition = AffTree::<2>::from_poly(poly, AffFunc::identity(60), None);
+    let precondition = AffTree::<2>::from_poly(poly, AffFunc::identity(60), None).unwrap();
     let layers = read_layers(&Path::new("tests/mnist_60-4x10.npz")).unwrap();
 
     group.bench_function("mnist [60-10-10-10-10]", |b| {

@@ -1,6 +1,6 @@
 [package]
 name = "affinitree"
-version = "0.22.0"
+version = "0.23.0"
 description = "A crate to distill faithful decision trees out of neural networks"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Conturing/affinitree"
@@ -14,30 +14,32 @@ rust-version = "1.64"
 
 [dependencies]
 approx = "0.5.1"
-console = "0.15.7"
-delegate = "0.10.0"
+average = "0.15.1"
+console = "0.15.8"
+csv = "1.3.0"
+delegate = "0.13.1"
 doc-comment = "0.3.3"
 float-ord = "0.3.2"
 highs = {version = "1.6.1", optional = true }
-indicatif = "0.17.5"
-itertools = "0.10.5"
-log = { version = "0.4.17" }
+indicatif = "0.17.8"
+itertools = "0.13.0"
+log = { version = "0.4.22" }
 minilp = {version = "0.2.2", optional = true }
 ndarray = {version = "0.15.6", features = ["approx-0_5"] }
 ndarray-npy = "0.8.1"
-num-traits = "0.2.18"
+num-traits = "0.2.19"
+overload = "0.1.1"
 rand = "0.8.5"
-regex = "1.9.0"
-slab = { version = "0.4.8" }
+regex = "1.9.6"
+slab = { version = "0.4.9" }
 serde = { version = "1.0", features = ["derive"] }
 take_mut = "0.2.2"
-overload = "0.1.1"
-csv = "1.3.0"
+thiserror = "1.0.65"
 
 [dev-dependencies]
-assertables = { version = "7.0.1" }
-criterion = "0.4.0"
-env_logger = "0.11.2"
+assertables = { version = "9.1.0" }
+criterion = "0.5.1"
+env_logger = "0.10.2"
 ndarray-rand = "0.14.0"
 
 [features]
@@ -54,9 +56,11 @@ lto = true
 codegen-units = 1
 # panic = "abort"
 debug = true
+strip = false
 
 [profile.release]
 lto = true
 codegen-units = 1
 # panic = "abort"
 debug = true
+strip = false

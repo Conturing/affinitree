@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -106,7 +106,7 @@ impl<'a, T: TraversalMut, N, const K: usize> TraversalIter<'a, T, N, K> {
     }
 }
 
-impl<'a, T: TraversalMut, N, const K: usize> Iterator for TraversalIter<'a, T, N, K> {
+impl<T: TraversalMut, N, const K: usize> Iterator for TraversalIter<'_, T, N, K> {
     type Item = T::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -332,15 +332,15 @@ mod test {
         let mut tree = Tree::<usize, 2>::new();
 
         let z = tree.add_root(10); // 0
-        let c0 = tree.add_child_node(z, 0, 11); // 1
-        let c1 = tree.add_child_node(z, 1, 12); // 2
-        let l0 = tree.add_child_node(c0, 0, 13); // 3
-        let l1 = tree.add_child_node(c0, 1, 14); // 4
-        let r0 = tree.add_child_node(c1, 0, 15); // 5
-        let r1 = tree.add_child_node(c1, 1, 16); // 6
-        let l2 = tree.add_child_node(l0, 1, 17); // 7
-        let l2r = tree.add_child_node(l2, 0, 18); // 8
-        let l2l = tree.add_child_node(l2, 1, 19); // 9
+        let c0 = tree.add_child_node(z, 0, 11).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, 12).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, 13).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, 14).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, 15).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, 16).unwrap(); // 6
+        let l2 = tree.add_child_node(l0, 1, 17).unwrap(); // 7
+        let l2r = tree.add_child_node(l2, 0, 18).unwrap(); // 8
+        let l2l = tree.add_child_node(l2, 1, 19).unwrap(); // 9
 
         let iter = DfsPre::iter(&tree, z);
         let nodes = Vec::from_iter(iter.map(|data| data.index));
@@ -353,15 +353,15 @@ mod test {
         let mut tree = Tree::<usize, 2>::new();
 
         let z = tree.add_root(10); // 0
-        let c0 = tree.add_child_node(z, 0, 11); // 1
-        let c1 = tree.add_child_node(z, 1, 12); // 2
-        let l0 = tree.add_child_node(c0, 0, 13); // 3
-        let l1 = tree.add_child_node(c0, 1, 14); // 4
-        let r0 = tree.add_child_node(c1, 0, 15); // 5
-        let r1 = tree.add_child_node(c1, 1, 16); // 6
-        let l2 = tree.add_child_node(l0, 1, 17); // 7
-        let l2r = tree.add_child_node(l2, 0, 18); // 8
-        let l2l = tree.add_child_node(l2, 1, 19); // 9
+        let c0 = tree.add_child_node(z, 0, 11).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, 12).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, 13).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, 14).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, 15).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, 16).unwrap(); // 6
+        let l2 = tree.add_child_node(l0, 1, 17).unwrap(); // 7
+        let l2r = tree.add_child_node(l2, 0, 18).unwrap(); // 8
+        let l2l = tree.add_child_node(l2, 1, 19).unwrap(); // 9
 
         let mut iter = DfsPre::iter(&tree, z);
         iter.next(); // z
@@ -379,15 +379,15 @@ mod test {
         let mut tree = Tree::<usize, 2>::new();
 
         let z = tree.add_root(10); // 0
-        let c0 = tree.add_child_node(z, 0, 11); // 1
-        let c1 = tree.add_child_node(z, 1, 12); // 2
-        let l0 = tree.add_child_node(c0, 0, 13); // 3
-        let l1 = tree.add_child_node(c0, 1, 14); // 4
-        let r0 = tree.add_child_node(c1, 0, 15); // 5
-        let r1 = tree.add_child_node(c1, 1, 16); // 6
-        let l2 = tree.add_child_node(l0, 1, 17); // 7
-        let l2r = tree.add_child_node(l2, 0, 18); // 8
-        let l2l = tree.add_child_node(l2, 1, 19); // 9
+        let c0 = tree.add_child_node(z, 0, 11).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, 12).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, 13).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, 14).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, 15).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, 16).unwrap(); // 6
+        let l2 = tree.add_child_node(l0, 1, 17).unwrap(); // 7
+        let l2r = tree.add_child_node(l2, 0, 18).unwrap(); // 8
+        let l2l = tree.add_child_node(l2, 1, 19).unwrap(); // 9
 
         let iter = DfsPre::iter(&tree, z);
         let remaining = Vec::from_iter(iter.map(|data| data.n_remaining));
@@ -401,15 +401,15 @@ mod test {
         let mut tree = Tree::<usize, 2>::new();
 
         let z = tree.add_root(10); // 0
-        let c0 = tree.add_child_node(z, 0, 11); // 1
-        let c1 = tree.add_child_node(z, 1, 12); // 2
-        let l0 = tree.add_child_node(c0, 0, 13); // 3
-        let l1 = tree.add_child_node(c0, 1, 14); // 4
-        let r0 = tree.add_child_node(c1, 0, 15); // 5
-        let r1 = tree.add_child_node(c1, 1, 16); // 6
-        let l2 = tree.add_child_node(l0, 1, 17); // 7
-        let l2r = tree.add_child_node(l2, 0, 18); // 8
-        let l2l = tree.add_child_node(l2, 1, 19); // 9
+        let c0 = tree.add_child_node(z, 0, 11).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, 12).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, 13).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, 14).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, 15).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, 16).unwrap(); // 6
+        let l2 = tree.add_child_node(l0, 1, 17).unwrap(); // 7
+        let l2r = tree.add_child_node(l2, 0, 18).unwrap(); // 8
+        let l2l = tree.add_child_node(l2, 1, 19).unwrap(); // 9
 
         let mut iter = DfsPre::iter(&tree, z);
         iter.next(); // z
@@ -429,13 +429,13 @@ mod test {
         let mut tree = Tree::<(), 2>::new();
 
         let z = tree.add_root(()); // 0
-        let c0 = tree.add_child_node(z, 0, ()); // 1
-        let c1 = tree.add_child_node(z, 1, ()); // 2
-        let l0 = tree.add_child_node(c0, 0, ()); // 3
-        let l1 = tree.add_child_node(c0, 1, ()); // 4
-        let r0 = tree.add_child_node(c1, 0, ()); // 5
-        let r1 = tree.add_child_node(c1, 1, ()); // 6
-        let rr1 = tree.add_child_node(r1, 1, ()); // 7
+        let c0 = tree.add_child_node(z, 0, ()).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, ()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, ()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, ()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, ()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, ()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, ()).unwrap(); // 7
 
         let iter = DfsEdge::iter(&tree, z);
         let nodes = Vec::from_iter(iter.map(|edge| (edge.src, edge.label, edge.dest)));
@@ -466,15 +466,15 @@ mod test {
         let mut tree = Tree::<usize, 2>::new();
 
         let z = tree.add_root(10); // 0
-        let c0 = tree.add_child_node(z, 0, 11); // 1
-        let c1 = tree.add_child_node(z, 1, 12); // 2
-        let l0 = tree.add_child_node(c0, 0, 13); // 3
-        let l1 = tree.add_child_node(c0, 1, 14); // 4
-        let r0 = tree.add_child_node(c1, 0, 15); // 5
-        let r1 = tree.add_child_node(c1, 1, 16); // 6
-        let l2 = tree.add_child_node(l0, 1, 17); // 7
-        let l2r = tree.add_child_node(l2, 0, 18); // 8
-        let l2l = tree.add_child_node(l2, 1, 19); // 9
+        let c0 = tree.add_child_node(z, 0, 11).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, 12).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, 13).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, 14).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, 15).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, 16).unwrap(); // 6
+        let l2 = tree.add_child_node(l0, 1, 17).unwrap(); // 7
+        let l2r = tree.add_child_node(l2, 0, 18).unwrap(); // 8
+        let l2l = tree.add_child_node(l2, 1, 19).unwrap(); // 9
 
         let iter = Bfs::iter(&tree, z);
         let nodes = Vec::from_iter(iter.map(|data| data.index));
@@ -487,15 +487,15 @@ mod test {
         let mut tree = Tree::<usize, 2>::new();
 
         let z = tree.add_root(10); // 0
-        let c0 = tree.add_child_node(z, 0, 11); // 1
-        let c1 = tree.add_child_node(z, 1, 12); // 2
-        let l0 = tree.add_child_node(c0, 0, 13); // 3
-        let l1 = tree.add_child_node(c0, 1, 14); // 4
-        let r0 = tree.add_child_node(c1, 0, 15); // 5
-        let r1 = tree.add_child_node(c1, 1, 16); // 6
-        let l2 = tree.add_child_node(l0, 1, 17); // 7
-        let l2r = tree.add_child_node(l2, 0, 18); // 8
-        let l2l = tree.add_child_node(l2, 1, 19); // 9
+        let c0 = tree.add_child_node(z, 0, 11).unwrap(); // 1
+        let c1 = tree.add_child_node(z, 1, 12).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, 13).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, 14).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, 15).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, 16).unwrap(); // 6
+        let l2 = tree.add_child_node(l0, 1, 17).unwrap(); // 7
+        let l2r = tree.add_child_node(l2, 0, 18).unwrap(); // 8
+        let l2l = tree.add_child_node(l2, 1, 19).unwrap(); // 9
 
         let mut iter = Bfs::iter(&tree, z);
         iter.next(); // z

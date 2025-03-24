@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -22,13 +22,13 @@
 mod tests {
     use std::path::Path;
 
-    use affinitree::distill::builder::{afftree_from_layers_verbose, read_layers, Layer};
+    use affinitree::distill::builder::{Layer, afftree_from_layers_verbose, read_layers};
     use affinitree::linalg::affine::Polytope;
     use affinitree::pwl::node::NodeState;
     use approx::assert_relative_eq;
     use ndarray::{Array, Array1};
-    use ndarray_rand::rand_distr::Normal;
     use ndarray_rand::RandomExt;
+    use ndarray_rand::rand_distr::Normal;
     use rand::SeedableRng;
 
     fn init_logger() {

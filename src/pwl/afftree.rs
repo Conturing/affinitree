@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -20,14 +20,15 @@ use std::fmt::Display;
 use std::mem;
 
 use itertools::Itertools;
-use ndarray::{concatenate, Array1, Array2, Axis};
+use ndarray::{Array1, Axis, concatenate};
+use thiserror::Error;
 
 use super::iter::PolyhedraIter;
-use super::node::{write_children, AffContent};
+use super::node::{AffContent, write_children};
 use crate::linalg::affine::{AffFunc, Polytope};
 use crate::pwl::iter::PolyhedraGen;
 use crate::pwl::node::{AffNode, NodeState};
-use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
+use crate::tree::graph::{Label, NodeError, Tree, TreeIndex, TreeNode};
 
 /// A specialized decision tree to hold [piece-wise linear functions](https://en.wikipedia.org/wiki/Piecewise_linear_function).
 ///
@@ -115,7 +116,7 @@ use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
 /// tree1.add_child_node(0, 1, aff!([[-3, 0], [0, -3]] + [0, 5]));
 ///
 /// let mut comp = tree0.clone();
-/// comp.compose::<false>(&tree1);
+/// comp.compose::<false, false>(&tree1);
 ///
 /// // the sequential evaluation of tree0 and tree1 on the input vector (2, -7)
 /// // yields the same result as evaluating the composition tree
@@ -159,9 +160,9 @@ use crate::tree::graph::{Label, Tree, TreeIndex, TreeNode};
 /// A wide variety of arithmetic operators are defined for piece-wise linear functions.
 /// These are also available for [AffTree]s based on a general lifting principle for
 /// decision trees. Concretely, [AffTree]s support addition, subtraction, multiplication,
-/// division, and remainder (with inline operators +, -, *, /, %).
+/// and division (with inline operators +, -, *, /).
 ///
-/// Other operators can be defined by implementing the [CompositionSchema] trait.
+/// Other operators can be defined by implementing the [``super::impl_composition::CompositionSchema``] trait.
 ///
 /// # Reduction
 /// A decision is redundant whenever all its children are (semantically) equivalent.
@@ -174,6 +175,22 @@ pub struct AffTree<const K: usize> {
     pub tree: Tree<AffContent, K>,
     pub in_dim: usize,
     pub(super) polytope_cache: RefCell<Vec<Polytope>>,
+}
+
+#[derive(Error, Debug)]
+pub enum InputError {
+    #[error("invalid input dimension (expected {expected:?}, found {found:?})")]
+    DimensionMismatch { expected: usize, found: usize },
+}
+
+impl InputError {
+    pub fn expect_dim(expected: usize, found: usize) -> Result<(), InputError> {
+        if expected != found {
+            Err(InputError::DimensionMismatch { expected, found })
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl<const K: usize> AffTree<K> {
@@ -203,7 +220,9 @@ impl<const K: usize> AffTree<K> {
             polytope_cache: RefCell::new(Vec::new()),
         }
     }
+}
 
+impl AffTree<2> {
     /// Crates an AffTree instance from the given polytope ``poly``.
     /// The resulting AffTree is a partial function that only accepts inputs inside
     /// the given ``poly``, which are then mapped using the given ``func_true``.
@@ -215,36 +234,36 @@ impl<const K: usize> AffTree<K> {
         poly: Polytope,
         func_true: AffFunc,
         func_false: Option<&AffFunc>,
-    ) -> AffTree<K> {
-        assert_eq!(poly.indim(), func_true.indim());
+    ) -> Result<AffTree<2>, InputError> {
+        InputError::expect_dim(poly.indim(), func_true.indim())?;
         assert!(poly.n_constraints() > 0);
         if let Some(aff_false) = func_false {
-            assert_eq!(poly.indim(), aff_false.indim());
+            InputError::expect_dim(poly.indim(), aff_false.indim())?;
         }
 
         let mut tree = Self::with_capacity(func_true.indim(), poly.n_constraints() + 1);
         let mut iter = poly.row_iter();
         let mut parent = tree.tree.get_root_idx();
-        let mut aff = iter.next().unwrap().as_function().to_owned();
-        aff.mat = -aff.mat;
+        let aff = iter.next().unwrap().as_function().to_owned();
         tree.tree.node_value_mut(parent).unwrap().aff = aff;
 
         for decision in iter {
             if let Some(aff_false) = func_false {
-                tree.add_child_node(parent, 0, aff_false.clone());
+                tree.add_child_node(parent, 0, aff_false.clone()).unwrap();
             }
-            let mut aff = decision.as_function().to_owned();
-            aff.mat = -aff.mat;
-            parent = tree.add_child_node(parent, 1, aff);
+            let aff = decision.as_function().to_owned();
+            parent = tree.add_child_node(parent, 1, aff).unwrap();
         }
         if let Some(aff_false) = func_false {
-            tree.add_child_node(parent, 0, aff_false.clone());
+            tree.add_child_node(parent, 0, aff_false.clone()).unwrap();
         }
-        tree.add_child_node(parent, 1, func_true);
+        tree.add_child_node(parent, 1, func_true).unwrap();
 
-        tree
+        Ok(tree)
     }
+}
 
+impl<const K: usize> AffTree<K> {
     /// Creates a new AffTree instance which corresponds to the affine [`AffFunc::slice`] function.
     pub fn from_slice(reference_point: &Array1<f64>) -> AffTree<K> {
         AffTree::from_aff(AffFunc::slice(reference_point))
@@ -273,7 +292,7 @@ impl<const K: usize> AffTree<K> {
     }
 
     /// Returns true if there are no values in this tree.
-    #[inline(always)]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
     }
@@ -287,9 +306,26 @@ impl<const K: usize> AffTree<K> {
     /// Returns the depth of this tree, that is, the length of its longest path.
     ///
     /// Correspondingly, an empty tree has depth 0, and a tree with only a root node has depth 1.
-    #[inline(always)]
+    #[inline]
     pub fn depth(&self) -> usize {
         self.tree.depth()
+    }
+
+    /// Returns statistics over the depth of this tree.
+    ///
+    /// Computes over the set of all terminal nodes the minimum, mean,
+    /// variance, and maximum of their depth.
+    #[inline]
+    pub fn depth_stats(&self) -> (f64, f64, f64, f64) {
+        self.tree.depth_stats()
+    }
+
+    /// Returns the number of nodes that can be added without reallocation.
+    ///
+    /// See also [`Tree::capacity`].
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.tree.capacity()
     }
 
     /// Reserve capacity for at least ``additional`` more nodes to be stored.
@@ -373,7 +409,12 @@ impl<const K: usize> AffTree<K> {
     ///
     /// **Use with caution:** Caller is responsible to uphold invariants.
     #[inline]
-    pub fn add_child_node(&mut self, node: TreeIndex, label: Label, aff: AffFunc) -> TreeIndex {
+    pub fn add_child_node(
+        &mut self,
+        node: TreeIndex,
+        label: Label,
+        aff: AffFunc,
+    ) -> Result<TreeIndex, NodeError> {
         self.tree.add_child_node(node, label, AffContent::new(aff))
     }
 
@@ -381,7 +422,12 @@ impl<const K: usize> AffTree<K> {
     ///
     /// **Use with caution:** Caller is responsible to uphold invariants.
     #[inline]
-    pub fn add_terminal(&mut self, node: TreeIndex, label: Label, aff: AffFunc) -> TreeIndex {
+    pub fn add_terminal(
+        &mut self,
+        node: TreeIndex,
+        label: Label,
+        aff: AffFunc,
+    ) -> Result<TreeIndex, NodeError> {
         self.tree.add_child_node(node, label, AffContent::new(aff))
     }
 
@@ -389,7 +435,12 @@ impl<const K: usize> AffTree<K> {
     ///
     /// **Use with caution:** Caller is responsible to uphold invariants.
     #[inline]
-    pub fn add_decision(&mut self, node: TreeIndex, label: Label, aff: AffFunc) -> TreeIndex {
+    pub fn add_decision(
+        &mut self,
+        node: TreeIndex,
+        label: Label,
+        aff: AffFunc,
+    ) -> Result<TreeIndex, NodeError> {
         assert!(
             aff.outdim() <= K,
             "Decision has more branches than allowed in this tree: K={} but num decisions={}",
@@ -400,7 +451,7 @@ impl<const K: usize> AffTree<K> {
     }
 
     /// Applies given function to a single node of the graph.
-    /// Updates the solution cache.
+    /// Preserves the solution cache.
     ///
     /// **Use with caution:** Caller is responsible to uphold invariants.
     pub fn apply_func_at_node(&mut self, node: TreeIndex, aff: &AffFunc) {
@@ -411,25 +462,28 @@ impl<const K: usize> AffTree<K> {
 
     /// Overwrite the currently stored function at ``node`` to ``aff`` and return the
     /// previously stored function.
-    /// Does not reset the solution cache.
+    /// Preserves the solution cache.
     ///
     /// **Use with caution:** Caller is responsible to uphold invariants.
-    pub fn update_node(&mut self, node: TreeIndex, aff: AffFunc) -> Option<AffFunc> {
+    pub fn update_node(&mut self, node: TreeIndex, aff: AffFunc) -> Result<AffFunc, NodeError> {
         let val = self.tree.node_value_mut(node)?;
-        Some(mem::replace(&mut val.aff, aff))
+        Ok(mem::replace(&mut val.aff, aff))
     }
 
     /// Sets given function of a single node of the graph and removes all descendants of original node.
     ///
     /// **Use with caution:** Caller is responsible to uphold invariants.
-    pub fn replace_node(&mut self, node_idx: TreeIndex, aff: AffFunc) -> TreeIndex {
-        // assert!(old_node.parent.is_some(), "Cannot replace default root!");
-        if node_idx == self.tree.get_root_idx() {
-            self.update_node(0, aff);
+    pub fn replace_node(
+        &mut self,
+        node_idx: TreeIndex,
+        aff: AffFunc,
+    ) -> Result<TreeIndex, NodeError> {
+        if self.tree.is_root(node_idx) {
+            self.update_node(node_idx, aff)?;
 
-            0
+            Ok(node_idx)
         } else {
-            let edg = self.tree.parent(node_idx).unwrap();
+            let edg = self.tree.parent(node_idx)?;
             let label = edg.label;
             let parent_idx = edg.source_idx;
             self.tree.remove_child(parent_idx, label);
@@ -446,27 +500,6 @@ impl<const K: usize> AffTree<K> {
         for leaf_idx in self.tree.terminal_indices().collect_vec() {
             self.apply_func_at_node(leaf_idx, aff_func);
         }
-    }
-
-    pub fn apply_partial_relu_at_node(&mut self, node: TreeIndex, relu_dim: usize) {
-        let aff_node = self.tree.tree_node(node).unwrap();
-        let mut aff_func_false = aff_node.value.aff.clone();
-        let aff_func_true = aff_node.value.aff.clone();
-        let afffunc = aff_node.value.aff.clone();
-
-        aff_func_false.mat.row_mut(relu_dim).fill(0 as f64);
-        aff_func_false.bias[relu_dim] = 0 as f64;
-        self.add_child_node(node, 1, aff_func_true);
-        self.add_child_node(node, 0, aff_func_false);
-
-        // update old node to contain predicate
-        let mut mat = Array2::zeros((0, afffunc.indim()));
-        mat.push_row(afffunc.mat.row(relu_dim))
-            .expect("Could not push row to matrix (critical error)");
-        let mut bias = Array1::zeros(1);
-        bias[0] = afffunc.bias[relu_dim];
-        self.update_node(node, AffFunc::from_mats(mat, bias));
-        self.tree.tree_node_mut(node).unwrap().isleaf = false;
     }
 
     /// Evaluates this AffTree instance as a piece-wise linear function under
@@ -495,7 +528,7 @@ impl<const K: usize> AffTree<K> {
         &'a self,
         root: &'a AffNode<K>,
         input: &Array1<f64>,
-    ) -> Option<(&TreeNode<AffContent, K>, Vec<Label>)> {
+    ) -> Option<(&'a TreeNode<AffContent, K>, Vec<Label>)> {
         let mut current_node = root;
         let mut label_seq = Vec::new();
         let mut iter = 0;
@@ -507,7 +540,7 @@ impl<const K: usize> AffTree<K> {
                     current_node.children.iter().all(Option::is_none),
                     "nodes that are marked as leafs should not have any children"
                 );
-                return Some((&current_node, label_seq));
+                return Some((current_node, label_seq));
             }
 
             let label = self.evaluate_decision(current_node, input);
@@ -524,7 +557,7 @@ impl<const K: usize> AffTree<K> {
 
     /// Evaluates the given `node` as a linear decision under the given `input`.
     pub fn evaluate_decision(&self, node: &AffNode<K>, input: &Array1<f64>) -> Label {
-        let node_eval = node.value.aff.apply(input).map(|x| *x >= 0.);
+        let node_eval = (node.value.aff.mat.dot(input) - &node.value.aff.bias).map(|x| *x <= 0.);
         Self::index_from_label(node_eval)
     }
 
@@ -546,8 +579,8 @@ impl<const K: usize> AffTree<K> {
     /// Keeps the input axes where ``mask`` is True and removes all others in the whole tree.
     ///
     /// **Note:** Marked axes are silently dropped, which alters the represented piece-wise linear function. Best used in combination with slicing.
-    pub fn remove_axes(&mut self, mask: &Array1<bool>) {
-        assert_eq!(self.in_dim(), mask.shape()[0]);
+    pub fn remove_axes(&mut self, mask: &Array1<bool>) -> Result<(), InputError> {
+        InputError::expect_dim(self.in_dim(), mask.shape()[0])?;
 
         let keep_idx = mask
             .iter()
@@ -570,6 +603,8 @@ impl<const K: usize> AffTree<K> {
             node.aff.mat = concatenate(Axis(1), restricted_mat.as_slice()).unwrap();
             node.state = NodeState::Indeterminate;
         }
+
+        Ok(())
     }
 }
 
@@ -664,9 +699,23 @@ mod tests {
     }
 
     #[test]
+    fn test_from_aff() {
+        let dd = AffTree::<2>::from_aff(aff!([[2., -3.], [-7.5, 9.3]] + [-2., 4.]));
+
+        assert_eq!(dd.tree.len(), 1);
+        assert_eq!(dd.tree.num_children(0), 0);
+        assert_eq!(
+            dd.tree.node_value(0).unwrap().aff.mat,
+            arr2(&[[2., -3.], [-7.5, 9.3]])
+        );
+        assert_eq!(dd.tree.node_value(0).unwrap().aff.bias, arr1(&[-2., 4.]));
+    }
+
+    #[test]
     fn test_from_poly() {
         let poly = poly!([[1, 0, -1], [0, 1, 0]] < [-2, 2]);
-        let dd = AffTree::<2>::from_poly(poly, aff!([0, 0, 0] + 1), Some(&aff!([0, 0, 0] + 2)));
+        let dd =
+            AffTree::<2>::from_poly(poly, aff!([0, 0, 0] + 1), Some(&aff!([0, 0, 0] + 2))).unwrap();
 
         assert_eq!(dd.evaluate(&arr1(&[1., 1., 4.])).unwrap(), arr1(&[1.]));
         assert_eq!(dd.evaluate(&arr1(&[2., 1., 1.])).unwrap(), arr1(&[2.]));
@@ -678,10 +727,14 @@ mod tests {
         let mut dd = AffTree::from_aff(aff!(
             [[1., 2., 3., 4.], [4., 2., 0., -2.], [1., 3., -5., -7.]] + [11., 13., 17.]
         ));
-        dd.compose::<false>(&schema::ReLU(3));
+        dd.compose::<false, false>(&schema::partial_ReLU(3, 0));
+        dd.compose::<false, false>(&schema::partial_ReLU(3, 1));
+        dd.compose::<false, false>(&schema::partial_ReLU(3, 2));
+
+        // initialize cache
         dd.infeasible_elimination();
 
-        // check test assumption
+        // verify cache was initialized
         let wit = match &dd.tree.node_value(path!(dd.tree, 0, 1, 1)).unwrap().state {
             NodeState::FeasibleWitness(val) => val.clone(),
             _ => panic!("Invalid state of test case"),
@@ -691,7 +744,7 @@ mod tests {
 
         let wit2 = match &dd.tree.node_value(path!(dd.tree, 0, 1, 1)).unwrap().state {
             NodeState::FeasibleWitness(val) => val,
-            _ => panic!("Apply_function_at modified the cache"),
+            _ => panic!("apply_function_at modified the cache"),
         };
 
         assert_eq!(&wit, wit2);
@@ -701,11 +754,9 @@ mod tests {
     fn test_evaluate_0() {
         init_logger();
 
-        let aff = AffFunc::from_mats(arr2(&[[-1., 0.], [0., 1.]]), arr1(&[0., 0.]));
-
-        let mut dd = AffTree::<2>::from_aff(aff);
-        let relu = schema::ReLU(2);
-        dd.compose::<true>(&relu);
+        let mut dd = AffTree::<2>::from_aff(aff!([[-1., 0.], [0., 1.]] + [0., 0.]));
+        dd.compose::<true, false>(&schema::partial_ReLU(2, 0));
+        dd.compose::<true, false>(&schema::partial_ReLU(2, 1));
 
         assert_eq!(dd.evaluate(&arr1(&[1., 1.])).unwrap(), arr1(&[0., 1.]));
         assert_eq!(dd.evaluate(&arr1(&[-1., 1.])).unwrap(), arr1(&[1., 1.]));
@@ -717,11 +768,9 @@ mod tests {
     fn test_evaluate_1() {
         init_logger();
 
-        let aff = AffFunc::from_mats(arr2(&[[-2., 2.], [0., 1.]]), arr1(&[1., -1.]));
-
-        let mut dd = AffTree::<2>::from_aff(aff);
-        let relu = schema::ReLU(2);
-        dd.compose::<true>(&relu);
+        let mut dd = AffTree::<2>::from_aff(aff!([[-2., 2.], [0., 1.]] + [1., -1.]));
+        dd.compose::<true, false>(&schema::partial_ReLU(2, 0));
+        dd.compose::<true, false>(&schema::partial_ReLU(2, 1));
 
         assert_eq!(dd.evaluate(&arr1(&[2., 1.])).unwrap(), arr1(&[0., 0.]));
         assert_eq!(dd.evaluate(&arr1(&[-1., 2.])).unwrap(), arr1(&[7., 1.]));
@@ -733,23 +782,25 @@ mod tests {
     fn test_remove_axes() {
         init_logger();
 
-        let mut dd = AffTree::<2>::from_aff(AffFunc::from_mats(arr2(&[[2., 1.]]), arr1(&[-1.])));
+        let mut dd = AffTree::<2>::from_aff(aff!([[-2., -1.]] + [-1.]));
 
-        dd.add_child_node(0, 1, aff!([[1., 2.]] + [-0.5]));
-        dd.add_child_node(1, 1, aff!([[0.5, 5.]] + [0.]));
-        dd.add_child_node(2, 1, aff!([[3., -1.]] + [0.]));
-        dd.add_child_node(3, 1, aff!([[1., 1.]] + [-6.]));
-        dd.add_child_node(4, 0, aff!([[-1., 7.]] + [4.]));
-        dd.add_child_node(5, 1, aff!([[2., 0.2]] + [-3.]));
-        dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.]));
-        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.]));
+        dd.add_child_node(0, 1, aff!([[-1., -2.]] + [-0.5]))
+            .unwrap();
+        dd.add_child_node(1, 1, aff!([[-0.5, -5.]] + [0.])).unwrap();
+        dd.add_child_node(2, 1, aff!([[-3., 1.]] + [0.])).unwrap();
+        dd.add_child_node(3, 1, aff!([[-1., -1.]] + [-6.])).unwrap();
+        dd.add_child_node(4, 0, aff!([[1., -7.]] + [4.])).unwrap();
+        dd.add_child_node(5, 1, aff!([[-2., -0.2]] + [-3.]))
+            .unwrap();
+        dd.add_child_node(6, 0, aff!([[0., 0.]] + [1.])).unwrap();
+        dd.add_child_node(6, 1, aff!([[0., 0.]] + [0.])).unwrap();
 
         assert_eq!(dd.evaluate(&arr1(&[1., 0.])).unwrap(), arr1(&[1.]));
         assert_eq!(dd.evaluate(&arr1(&[1.5, 0.])).unwrap(), arr1(&[0.]));
         assert_eq!(dd.evaluate(&arr1(&[4., 0.])).unwrap(), arr1(&[0.]));
 
         let mut dd1 = dd.clone();
-        dd1.remove_axes(&arr1(&[true, false]));
+        dd1.remove_axes(&arr1(&[true, false])).unwrap();
 
         assert_eq!(dd1.in_dim(), 1);
         assert_eq!(dd1.evaluate(&arr1(&[1.])).unwrap(), arr1(&[1.]));
@@ -758,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn bool_to_vec() {
+    fn test_bool_to_vec() {
         init_logger();
 
         assert_eq!(
@@ -772,61 +823,16 @@ mod tests {
     }
 
     #[test]
-    fn apply_function() {
-        let dd = AffTree::<2>::from_aff(aff!([[2., -3.], [-7.5, 9.3]] + [-2., 4.]));
-
-        assert_eq!(dd.tree.len(), 1);
-        assert_eq!(dd.tree.num_children(0), 0);
-        assert_eq!(
-            dd.tree.node_value(0).unwrap().aff.mat,
-            arr2(&[[2., -3.], [-7.5, 9.3]])
-        );
-        assert_eq!(dd.tree.node_value(0).unwrap().aff.bias, arr1(&[-2., 4.]));
-    }
-
-    fn add_leaf(tree: &mut AffTree<2>, node_idx: usize, label: usize, bias_val: f64) {
-        let weights = arr2(&[[1., 1., 1.]]);
-        let bias = arr1(&[bias_val]);
-        let aff_func = AffFunc::from_mats(weights, bias);
-        tree.add_child_node(node_idx, label, aff_func);
-    }
-
-    fn generic_tree(infeasible: bool) -> AffTree<2> {
-        let mut tree = AffTree::<2>::from_aff(aff!([[0., 1., 0.]] + [2.]));
-        let weights = match infeasible {
-            true => arr2(&[[0., 1., 0.]]),
-            false => arr2(&[[5., 2., 8.]]),
-        };
-        let bias = match infeasible {
-            true => arr1(&[3.]),
-            false => arr1(&[20.]),
-        };
-        let aff = AffFunc::from_mats(weights, bias);
-
-        add_leaf(&mut tree, 0, 0, 1.);
-        tree.add_child_node(0, 1, aff);
-        add_leaf(&mut tree, 2, 0, 1.);
-        add_leaf(&mut tree, 2, 1, 1.);
-        tree
-    }
-
-    #[test]
-    pub fn test_get_label() {
-        init_logger();
-
-        let tree = generic_tree(true);
-
-        assert_eq!(tree.tree.get_label(0, 2).unwrap(), 1);
-        assert_eq!(tree.tree.get_label(2, 3).unwrap(), 0);
-        assert_eq!(tree.tree.get_label(2, 4).unwrap(), 1);
-    }
-
-    #[test]
     pub fn test_path_to_node() {
         init_logger();
 
-        let tree = generic_tree(true);
-        let path = tree.tree.path_to_node(3);
+        let mut tree = AffTree::<2>::from_aff(aff!([[0, 1, 0]] + [2]));
+        tree.add_child_node(0, 0, aff!([[1, 1, 1]] + [1])).unwrap();
+        tree.add_child_node(0, 1, aff!([[0, 1, 0]] + [3])).unwrap();
+        tree.add_child_node(2, 0, aff!([[1, 1, 1]] + [1])).unwrap();
+        tree.add_child_node(2, 1, aff!([[1, 1, 1]] + [1])).unwrap();
+
+        let path = tree.tree.path_to_node(3).unwrap();
         assert_eq!(path, vec![(0, 1), (2, 0)]);
     }
 
@@ -854,13 +860,13 @@ mod tests {
 
         let mut tree = AffTree::<2>::from_aff(val0.clone());
 
-        let c0 = tree.add_child_node(0, 0, val1.clone()); // 1
-        let c1 = tree.add_child_node(0, 1, val1.clone()); // 2
-        let l0 = tree.add_child_node(c0, 0, val2.clone()); // 3
-        let l1 = tree.add_child_node(c0, 1, val2.clone()); // 4
-        let r0 = tree.add_child_node(c1, 0, val2.clone()); // 5
-        let r1 = tree.add_child_node(c1, 1, val2.clone()); // 6
-        let rr1 = tree.add_child_node(r1, 1, val2.clone()); // 7
+        let c0 = tree.add_child_node(0, 0, val1.clone()).unwrap(); // 1
+        let c1 = tree.add_child_node(0, 1, val1.clone()).unwrap(); // 2
+        let l0 = tree.add_child_node(c0, 0, val2.clone()).unwrap(); // 3
+        let l1 = tree.add_child_node(c0, 1, val2.clone()).unwrap(); // 4
+        let r0 = tree.add_child_node(c1, 0, val2.clone()).unwrap(); // 5
+        let r1 = tree.add_child_node(c1, 1, val2.clone()).unwrap(); // 6
+        let rr1 = tree.add_child_node(r1, 1, val2.clone()).unwrap(); // 7
 
         let iter = PolyhedraIter::new(&tree.tree);
         let nodes = Vec::from_iter(iter.map(|(_, idx, _, _)| idx));
@@ -871,27 +877,5 @@ mod tests {
         let remaining = Vec::from_iter(iter.map(|(_, _, remaining, _)| remaining));
 
         assert_eq!(remaining, vec![0, 1, 1, 0, 0, 1, 0, 0]);
-    }
-
-    #[test]
-    pub fn test_relu() {
-        init_logger();
-
-        let mut a = AffTree::<2>::new(4);
-        a.apply_partial_relu_at_node(0, 2);
-        a.apply_partial_relu_at_node(a.tree.get_root().children[0].unwrap(), 0);
-
-        assert_eq!(
-            a.evaluate(&arr1(&[1., 1., 1., 1.])).unwrap(),
-            arr1(&[1., 1., 1., 1.])
-        );
-        assert_eq!(
-            a.evaluate(&arr1(&[-1., -1., -1., -1.])).unwrap(),
-            arr1(&[0., -1., 0., -1.])
-        );
-        assert_eq!(
-            a.evaluate(&arr1(&[-1., -1., 1., -1.])).unwrap(),
-            arr1(&[-1., -1., 1., -1.])
-        );
     }
 }

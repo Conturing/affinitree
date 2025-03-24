@@ -1,4 +1,4 @@
-//   Copyright 2024 affinitree developers
+//   Copyright 2025 affinitree developers
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -20,13 +20,13 @@ use itertools::Position::{First, Last, Middle, Only};
 use ndarray::Array1;
 
 use crate::linalg::affine::{AffFunc, Polytope};
-use crate::linalg::impl_affineformat::{write_func, write_poly, FormatOptions};
+use crate::linalg::impl_affineformat::{FormatOptions, write_func, write_poly};
 use crate::tree::graph::TreeNode;
 
 /// An enum of possible feasibility states a node can attain.
 ///
 /// The feasibility state of a node depends exclusively on the path that leads to it,
-/// and can therefore only be seen with respect to the [``AffTree``]
+/// and can therefore only be seen with respect to the [``crate::pwl::afftree::AffTree``]
 /// that contains the node.
 #[derive(Clone, Debug)]
 pub enum NodeState {
@@ -60,15 +60,13 @@ impl NodeState {
     }
 }
 
-/// A node type to store either a linear decision or linear function for an [``AffTree``].
+/// A node type to store either a linear decision or linear function for an [``crate::pwl::afftree::AffTree``].
 ///
 /// This type also tracks the feasibility of this node in form of a [``NodeState``].
 #[derive(Clone, Debug)]
 pub struct AffContent {
-    /// An affine function representing either the decision predicate A @ x + b >= 0,
+    /// An affine function representing either the decision predicate A @ x <= b,
     /// or the terminal function A @ x + b.
-    ///
-    /// Note: There is an inconsistency with the polytope class, which uses the format A @ x <= b.
     pub aff: AffFunc,
     /// Feasibility state of this node based on the unique path from the root to this node
     pub state: NodeState,
@@ -83,7 +81,7 @@ impl AffContent {
     }
 
     pub fn to_poly(&self) -> Polytope {
-        Polytope::from_mats(-self.aff.mat.clone(), self.aff.bias.clone())
+        Polytope::from_mats(self.aff.mat.clone(), self.aff.bias.clone())
     }
 
     pub fn feasible_witnesses(&self) -> Vec<Array1<f64>> {
@@ -108,7 +106,7 @@ impl<const K: usize> Display for AffNode<K> {
 
 /// Write a representation of ``pred`` interpreted as a decision node into ``f``.
 ///
-/// Here ``pred`` is interpreted as A @ x + b >= 0
+/// Here ``pred`` is interpreted as A @ x <= b
 pub fn write_predicate(
     f: &mut fmt::Formatter,
     pred: &AffFunc,
@@ -117,7 +115,7 @@ pub fn write_predicate(
     let opt = FormatOptions::default_poly();
     write_poly(
         f,
-        Polytope::from_mats(-pred.mat.clone(), pred.bias.clone()).view(),
+        Polytope::from_mats(pred.mat.clone(), pred.bias.clone()).view(),
         &opt,
     )
 }
@@ -137,10 +135,10 @@ pub fn write_children<T, F: Write, const K: usize>(
     f: &mut F,
     node: &TreeNode<T, K>,
 ) -> std::fmt::Result {
-    for child in node.children_iter().with_position() {
-        match child {
-            First((label, idx)) | Middle((label, idx)) => write!(f, "{}->{}, ", label, idx)?,
-            Only((label, idx)) | Last((label, idx)) => write!(f, "{}->{}", label, idx)?,
+    for (pos, (label, idx)) in node.children_iter().with_position() {
+        match pos {
+            First | Middle => write!(f, "{}->{}, ", label, idx)?,
+            Only | Last => write!(f, "{}->{}", label, idx)?,
         }
     }
     Ok(())
